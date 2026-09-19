@@ -9,6 +9,15 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+# 排除构建产物和原生工程中的生成文件、插件副本。
+# lib/（包括 lib/platform/macos/）和 test/ 仍正常分析；Swift/C++ 由各平台构建检查。
+analyzer:
+  exclude:
+    - build/**
+    - windows/**
+    - macos/**
+    - linux/**
+
 formatter:
   page_width: 100
   trailing_commas: automate

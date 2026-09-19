@@ -17,17 +17,40 @@ class AppUpdateInfo {
   final String installerSha256;
   final String? releaseUrl;
   final DateTime? publishedAt;
+  final bool manualDownload;
 
   const AppUpdateInfo({
     required this.version,
     required this.tag,
-    required this.installerUrl,
-    required this.installerSha256,
+    this.installerUrl = '',
+    this.installerSha256 = '',
     this.releaseUrl,
     this.publishedAt,
+    this.manualDownload = false,
   });
 
-  factory AppUpdateInfo.fromJson(Map<String, dynamic> json) {
+  factory AppUpdateInfo.fromJson(Map<String, dynamic> json, {String? platform}) {
+    final target = platform ?? Platform.operatingSystem;
+    if (target == 'macos') {
+      // 只接受明确提供 Mac 包的版本，旧 Windows 清单不能触发错误的平台更新。
+      if (json['macos'] is! Map) {
+        throw const FormatException('该版本尚未提供 MacOS 下载包，请稍后再检查更新');
+      }
+      final version = '${json['version'] ?? ''}'.trim();
+      final tag = '${json['tag'] ?? 'v$version'}'.trim();
+      final releaseUrl = '${json['release_url'] ?? ''}'.trim();
+      if (version.isEmpty || !isGithubReleasePage(releaseUrl, tag: tag)) {
+        throw const FormatException('更新清单缺少有效的 GitHub 版本下载页面');
+      }
+      return AppUpdateInfo(
+        version: version,
+        tag: tag,
+        releaseUrl: releaseUrl,
+        publishedAt: DateTime.tryParse('${json['published_at'] ?? ''}'),
+        manualDownload: true,
+      );
+    }
+    if (target != 'windows') throw UnsupportedError('当前平台暂不支持检查更新');
     final windows = json['windows'];
     if (windows is! Map) {
       throw const FormatException('更新清单缺少 Windows 安装包信息');
@@ -51,6 +74,28 @@ class AppUpdateInfo {
   }
 }
 
+/// 手动更新只允许打开 GitHub 对应版本页，不把清单中的任意 URL 交给系统执行。
+bool isGithubReleasePage(String url, {required String tag}) {
+  final uri = Uri.tryParse(url);
+  if (uri == null ||
+      uri.scheme != 'https' ||
+      uri.host != 'github.com' ||
+      uri.port != 443 ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasQuery ||
+      uri.hasFragment) {
+    return false;
+  }
+  final parts = uri.pathSegments;
+  return tag.isNotEmpty &&
+      parts.length == 5 &&
+      parts[0].isNotEmpty &&
+      parts[1].isNotEmpty &&
+      parts[2] == 'releases' &&
+      parts[3] == 'tag' &&
+      parts[4] == tag;
+}
+
 class UpdateCheckResult {
   final String currentVersion;
   final AppUpdateInfo latest;
@@ -72,8 +117,8 @@ class AppUpdateService {
   }
 
   Future<File> downloadInstaller(AppUpdateInfo update, {UpdateProgress? onProgress}) async {
-    if (!Platform.isWindows) {
-      throw UnsupportedError('当前仅支持 Windows 自动安装更新');
+    if (!Platform.isWindows || update.manualDownload) {
+      throw UnsupportedError('当前更新需要前往 GitHub 手动下载，不支持自动安装');
     }
 
     final uri = Uri.parse(update.installerUrl);

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 
 import '../../app_info.dart';
+import '../../platform/desktop_platform.dart';
 import '../../services/update_service.dart';
 import '../../stores/app_state.dart';
 import '../theme/app_theme.dart';
@@ -15,6 +16,10 @@ class AppUpdateDialog {
   const AppUpdateDialog._();
 
   static Future<void> checkAndShow(BuildContext context, AppState appState) async {
+    if (!desktopPlatform.supports(DesktopFeature.updateCheck)) {
+      AppToast.info(context, '当前平台暂不支持检查更新。');
+      return;
+    }
     AppToast.info(context, '正在检查更新…');
     try {
       final result = await appState.checkForUpdates();
@@ -53,6 +58,7 @@ class AppUpdateDialog {
     required String currentVersion,
     required AppUpdateInfo update,
   }) {
+    var openingReleasePage = false;
     return AppDialog.show<void>(
       context: context,
       title: '发现新版本',
@@ -66,7 +72,9 @@ class AppUpdateDialog {
               Text('Codexter v${update.version}', style: AppTones.title(theme, size: 16)),
               const Gap(AppSpacing.sm),
               Text(
-                '当前版本 v$currentVersion，下载完成后将打开安装程序，并关闭 Codexter。请按安装向导完成升级。',
+                update.manualDownload
+                    ? '当前版本 v$currentVersion。请前往 GitHub 下载 MacOS 新版本，退出 Codexter 后替换应用。此操作不会自动下载、安装或关闭当前服务。'
+                    : '当前版本 v$currentVersion，下载完成后将打开安装程序，并关闭 Codexter。请按安装向导完成升级。',
                 style: AppTones.muted(theme, size: 12),
               ),
             ],
@@ -81,7 +89,26 @@ class AppUpdateDialog {
         ),
         Button(
           style: ButtonStyle.primary(size: ButtonSize.normal),
-          onPressed: () {
+          onPressed: () async {
+            if (update.manualDownload) {
+              if (openingReleasePage) return;
+              openingReleasePage = true;
+              try {
+                final url = update.releaseUrl ?? '';
+                if (!isGithubReleasePage(url, tag: update.tag)) {
+                  throw const FormatException('无效的 GitHub 版本下载页面');
+                }
+                if (!await appState.setupService.openUrl(url)) {
+                  throw const FileSystemException('打开 GitHub 失败，请稍后重试');
+                }
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+              } catch (error) {
+                if (dialogContext.mounted) AppToast.error(dialogContext, _friendlyError(error));
+              } finally {
+                openingReleasePage = false;
+              }
+              return;
+            }
             Navigator.of(dialogContext).pop();
             Future<void>.microtask(() {
               if (context.mounted) {
@@ -89,13 +116,17 @@ class AppUpdateDialog {
               }
             });
           },
-          child: const Text('立即更新'),
+          child: Text(update.manualDownload ? '前往 GitHub 下载' : '立即更新'),
         ),
       ],
     );
   }
 
   static Future<void> _showDownload(BuildContext context, AppState appState, AppUpdateInfo update) {
+    if (update.manualDownload || !desktopPlatform.supports(DesktopFeature.inAppUpdate)) {
+      AppToast.info(context, '请前往 GitHub 手动下载当前平台的新版本');
+      return Future<void>.value();
+    }
     return AppDialog.show<void>(
       context: context,
       title: '正在更新 Codexter',

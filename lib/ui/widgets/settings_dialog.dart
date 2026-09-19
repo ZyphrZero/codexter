@@ -9,6 +9,7 @@ import '../theme/app_theme.dart';
 import 'app_components.dart';
 import 'app_spacing.dart';
 import 'app_toast.dart';
+import 'cloudflare_login_notice.dart';
 import 'json_view.dart';
 
 class SettingsDialog {
@@ -97,6 +98,7 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
   late bool _useCloudflared;
   int _section = 0;
   bool _saving = false;
+  String? _loginUrl;
 
   AppState get appState => widget.appState;
 
@@ -345,6 +347,10 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (_loginUrl != null) ...[
+          CloudflareLoginNotice(url: _loginUrl!),
+          const Gap(AppSpacing.xl),
+        ],
         if (appState.lastError != null) ...[
           AppNotice(
             tone: AppNoticeTone.danger,
@@ -489,6 +495,10 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
     }
   }
 
+  void _updateLoginUrl(String? url) {
+    if (mounted) setState(() => _loginUrl = url);
+  }
+
   Future<void> _saveAndRestart() async {
     setState(() => _saving = true);
     try {
@@ -508,7 +518,7 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
       if (_useCloudflared && domain.isNotEmpty && tunnelId != null && tunnelId.isNotEmpty) {
         final bin = await _setupService.findCloudflaredBin();
         if (bin == null) throw Exception('未找到 cloudflared');
-        await _setupService.ensureDnsRoute(bin, tunnelId, domain);
+        await _setupService.ensureDnsRoute(bin, tunnelId, domain, onLoginUrl: _updateLoginUrl);
       }
 
       await appState.restartServices();
@@ -535,10 +545,10 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
       final tunnelName = _tunnelNameController.text.trim().isEmpty
           ? 'codex-mcp'
           : _tunnelNameController.text.trim();
-      final login = await _setupService.loginCloudflare(bin);
+      final login = await _setupService.loginCloudflare(bin, onLoginUrl: _updateLoginUrl);
       if (!login.success) throw Exception(login.error ?? 'Cloudflare 登录未完成');
       final tunnelId = await _setupService.createTunnel(bin, tunnelName);
-      await _setupService.ensureDnsRoute(bin, tunnelId, domain);
+      await _setupService.ensureDnsRoute(bin, tunnelId, domain, onLoginUrl: _updateLoginUrl);
       final updated = await _setupService.writeTunnelConfig(
         appState.config.copyWith(
           domain: domain,

@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import '../widgets/app_spacing.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/cloudflare_login_notice.dart';
 import '../widgets/setup_wizard_steps.dart';
 
 /// 首次启动向导：cloudflared → 域名 → Tunnel → 完成
@@ -30,6 +31,7 @@ class _FirstRunPageState extends State<FirstRunPage> {
   bool _busy = false;
   String? _error;
   String? _status;
+  String? _loginUrl;
   String? _cloudflaredBin;
   String? _cloudflaredVersion;
   bool _probed = false;
@@ -81,6 +83,10 @@ class _FirstRunPageState extends State<FirstRunPage> {
                             ],
                             if (_status != null && _step != 0) ...[
                               AppNotice(tone: AppNoticeTone.info, message: _status!),
+                              const Gap(AppSpacing.lg),
+                            ],
+                            if (_loginUrl != null) ...[
+                              CloudflareLoginNotice(url: _loginUrl!),
                               const Gap(AppSpacing.lg),
                             ],
                             _buildStepBody(),
@@ -255,7 +261,12 @@ class _FirstRunPageState extends State<FirstRunPage> {
     if (mounted) setState(() => _step++);
   }
 
+  void _updateLoginUrl(String? url) {
+    if (mounted) setState(() => _loginUrl = url);
+  }
+
   Future<bool> _provisionTunnel() async {
+    if (_busy) return false;
     final bin = _cloudflaredBin;
     if (bin == null) {
       setState(() => _error = 'cloudflared 未安装');
@@ -273,14 +284,15 @@ class _FirstRunPageState extends State<FirstRunPage> {
           ? 'codex-mcp'
           : _tunnelNameController.text.trim();
 
-      final login = await _setupService.loginCloudflare(bin);
+      final login = await _setupService.loginCloudflare(bin, onLoginUrl: _updateLoginUrl);
       if (!login.success) throw Exception(login.error ?? 'Cloudflare 登录未完成');
 
-      setState(() => _status = '正在创建 Tunnel…');
+      if (!mounted) return false;
+      setState(() => _status = '正在创建或复用 Tunnel…');
       final tunnelId = await _setupService.createTunnel(bin, tunnelName);
 
       setState(() => _status = '正在配置 DNS 路由…');
-      await _setupService.ensureDnsRoute(bin, tunnelId, domain);
+      await _setupService.ensureDnsRoute(bin, tunnelId, domain, onLoginUrl: _updateLoginUrl);
 
       setState(() => _status = '正在写入配置…');
       final port = await AppPaths.findAvailablePort(18920);

@@ -3,6 +3,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:path/path.dart' as p;
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import '../../models/workspace.dart';
+import '../../platform/desktop_platform.dart';
 import '../../stores/app_state.dart';
 import 'app_components.dart';
 import 'app_dialog.dart';
@@ -280,10 +281,12 @@ class _CreateWorkspaceDialogState extends State<CreateWorkspaceDialog> {
         AppField(
           label: '项目路径',
           controller: _pathController,
-          placeholder: r'C:\Projects\my-project',
+          placeholder: desktopPlatform.workspacePathHint,
           trailing: Button(
             style: ButtonStyle.outline(size: ButtonSize.normal),
-            onPressed: Platform.isWindows ? _pickDirectory : null,
+            onPressed: desktopPlatform.supports(DesktopFeature.directoryPicker)
+                ? _pickDirectory
+                : null,
             child: const Text('浏览'),
           ),
           hint: '文件读写和命令默认都限制在此目录范围内。',

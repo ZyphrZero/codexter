@@ -2,148 +2,173 @@ name: Build and Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag，例如 v1.0.1（必须与 pubspec.yaml 版本一致）'
+        description: '正式版本 Tag，例如 v1.0.7，必须与 pubspec.yaml 一致'
         required: true
         type: string
+      publish:
+        description: '发布 Release（默认只构建；发布时必须已存在对应 Tag）'
+        type: boolean
+        default: false
 
+# 不取消进行中的发布；跨版本串行，避免旧任务覆盖较新的更新入口。
+concurrency:
+  group: codexter-release
+  cancel-in-progress: false
 permissions:
-  contents: write
+  contents: read
 
 env:
   FLUTTER_VERSION: '3.44.9'
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-  RELEASE_REPOSITORY: ${{ vars.RELEASE_REPOSITORY }}
 
 jobs:
-  windows-release:
-    runs-on: windows-latest
-
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.meta.outputs.commit }}
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      repository: ${{ steps.meta.outputs.repository }}
+      manifest_url: ${{ steps.meta.outputs.manifest_url }}
+      publish: ${{ steps.meta.outputs.publish }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Validate release version
+      - uses: actions/checkout@v6
+        with:
+          # 手动只构建时验证所选分支；正式发布必须检出对应 Tag，而非分支最新代码。
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+      - name: Validate version and resolve update source
+        id: meta
         shell: pwsh
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+          SHOULD_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+          RELEASE_REPOSITORY: ${{ vars.RELEASE_REPOSITORY }}
+          UPDATE_MANIFEST_URL: ${{ vars.UPDATE_MANIFEST_URL }}
         run: |
-          $line = Select-String -Path pubspec.yaml -Pattern '^version:\s*(.+)$' | Select-Object -First 1
-          if (-not $line) { throw 'Version not found in pubspec.yaml' }
-          $fullVersion = $line.Matches[0].Groups[1].Value.Trim()
-          $version = $fullVersion.Split('+')[0]
-          $expectedTag = "v$version"
-          if ($env:RELEASE_TAG -ne $expectedTag) {
-            throw "Tag $env:RELEASE_TAG does not match pubspec version $fullVersion (expected $expectedTag)"
-          }
-          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Releasing Codexter $fullVersion"
+          $ErrorActionPreference = 'Stop'
+          $line = Select-String -Path pubspec.yaml -Pattern '^version:\s*(\d+\.\d+\.\d+)(?:\+\d+)?\s*$' | Select-Object -First 1
+          if (-not $line) { throw 'pubspec.yaml 必须使用正式版本号' }
+          $version = $line.Matches[0].Groups[1].Value
+          if ($env:REQUESTED_TAG -cne "v$version") { throw 'Tag 与 pubspec.yaml 版本不一致' }
+          $repo = if ($env:RELEASE_REPOSITORY) { $env:RELEASE_REPOSITORY } else { $env:GITHUB_REPOSITORY }
+          if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw '发布仓库格式错误' }
+          $manifest = if ($env:UPDATE_MANIFEST_URL) { $env:UPDATE_MANIFEST_URL } else { "https://github.com/$repo/releases/latest/download/latest.json" }
+          $uri = [uri]$manifest
+          if (-not $uri.IsAbsoluteUri -or $uri.Scheme -ne 'https' -or $manifest -match '[\r\n]') { throw '更新源必须为单行 HTTPS 地址' }
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw '读取提交失败' }
+          @("commit=$commit", "version=$version", "tag=$env:REQUESTED_TAG", "repository=$repo", "manifest_url=$manifest", "publish=$($env:SHOULD_PUBLISH.ToLowerInvariant())") | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Install Flutter
+  windows:
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - name: Install pinned Flutter
         shell: pwsh
         run: |
           $flutterDir = Join-Path $env:RUNNER_TEMP 'flutter'
           git clone --depth 1 --branch $env:FLUTTER_VERSION https://github.com/flutter/flutter.git $flutterDir
+          if ($LASTEXITCODE -ne 0) { throw '下载 Flutter 失败' }
           "$flutterDir\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Flutter info
-        shell: pwsh
-        run: flutter --version
-
-      - name: Resolve dependencies
-        shell: pwsh
-        run: flutter pub get
-
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
       - name: Check formatting
-        shell: pwsh
-        run: dart format --output=none --set-exit-if-changed .
-
+        run: dart format --output=none --set-exit-if-changed lib test
       - name: Analyze
-        shell: pwsh
-        run: flutter analyze
-
+        run: flutter analyze --no-pub
       - name: Test
-        shell: pwsh
-        run: flutter test
-
-      - name: Resolve release target
-        shell: pwsh
-        run: |
-          $releaseRepo = if ($env:RELEASE_REPOSITORY) { $env:RELEASE_REPOSITORY } else { $env:GITHUB_REPOSITORY }
-          $manifestUrl = '${{ vars.UPDATE_MANIFEST_URL }}'
-          if (-not $manifestUrl -and $releaseRepo -ne $env:GITHUB_REPOSITORY) {
-            $manifestUrl = "https://github.com/$releaseRepo/releases/latest/download/latest.json"
-          }
-          "TARGET_RELEASE_REPOSITORY=$releaseRepo" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "TARGET_UPDATE_MANIFEST_URL=$manifestUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Release repository: $releaseRepo"
-          if ($manifestUrl) { Write-Host "Update manifest: $manifestUrl" }
-
+        run: flutter test --no-pub
       - name: Build Windows packages
         shell: pwsh
-        run: |
-          if ($env:TARGET_UPDATE_MANIFEST_URL) {
-            .\scripts\build_windows.ps1 -SkipAnalyze -UpdateManifestUrl $env:TARGET_UPDATE_MANIFEST_URL
-          } else {
-            .\scripts\build_windows.ps1 -SkipAnalyze
-          }
-
-      - name: Generate update manifest
-        shell: pwsh
-        run: |
-          .\scripts\generate_update_manifest.ps1 `
-            -Version $env:APP_VERSION `
-            -Tag $env:RELEASE_TAG `
-            -Repository $env:TARGET_RELEASE_REPOSITORY
-
-      - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        env:
+          UPDATE_MANIFEST_URL: ${{ needs.prepare.outputs.manifest_url }}
+        run: ./scripts/build_windows.ps1 -SkipAnalyze -UpdateManifestUrl $env:UPDATE_MANIFEST_URL
+      - uses: actions/upload-artifact@v4
         with:
-          name: Codexter-${{ env.RELEASE_TAG }}-windows
+          name: release-windows
           path: |
-            dist/Codexter-*-Setup.exe
-            dist/Codexter-*-windows-x64.zip
-            dist/latest.json
+            dist/Codexter-${{ needs.prepare.outputs.version }}-Setup.exe
+            dist/Codexter-${{ needs.prepare.outputs.version }}-windows-x64.zip
           if-no-files-found: error
+          overwrite: true
 
-      - name: Publish GitHub Release
+  macos:
+    needs: prepare
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - name: Install pinned Flutter
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Check Apple build tools
+        run: |
+          xcodebuild -version
+          pod --version
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Analyze
+        run: flutter analyze --no-pub
+      - name: Test
+        run: flutter test --no-pub
+      - name: Build and verify MacOS Universal package
+        env:
+          UPDATE_MANIFEST_URL: ${{ needs.prepare.outputs.manifest_url }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: dist/Codexter-${{ needs.prepare.outputs.version }}-macos-universal.zip
+          if-no-files-found: error
+          overwrite: true
+
+  publish:
+    needs: [prepare, windows, macos]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-windows
+          path: dist
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-macos
+          path: dist
+      - name: Publish complete release from draft
         shell: pwsh
         env:
-          SOURCE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
           EXTERNAL_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TARGET_REPOSITORY: ${{ needs.prepare.outputs.repository }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          $env:GH_TOKEN = if ($env:EXTERNAL_RELEASE_TOKEN) { $env:EXTERNAL_RELEASE_TOKEN } else { $env:SOURCE_GITHUB_TOKEN }
-          $repo = $env:TARGET_RELEASE_REPOSITORY
-          $files = @(
-            "dist/Codexter-$env:APP_VERSION-Setup.exe",
-            "dist/Codexter-$env:APP_VERSION-windows-x64.zip",
-            'dist/latest.json'
-          )
-          gh release view $env:RELEASE_TAG --repo $repo *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:RELEASE_TAG @files --clobber --repo $repo
-          } else {
-            gh release create $env:RELEASE_TAG @files `
-              --repo $repo `
-              --title "Codexter $env:APP_VERSION" `
-              --generate-notes
+          if ($env:TARGET_REPOSITORY -ne $env:GITHUB_REPOSITORY -and -not $env:EXTERNAL_RELEASE_TOKEN) {
+            throw '独立发布仓库需要配置 RELEASE_TOKEN'
           }
-
-      - name: Remove broken v1.0.2 release
-        if: env.RELEASE_TAG == 'v1.0.3'
-        shell: pwsh
-        env:
-          SOURCE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EXTERNAL_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: |
-          $env:GH_TOKEN = if ($env:EXTERNAL_RELEASE_TOKEN) { $env:EXTERNAL_RELEASE_TOKEN } else { $env:SOURCE_GITHUB_TOKEN }
-          $repo = $env:TARGET_RELEASE_REPOSITORY
-          gh release view v1.0.2 --repo $repo *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release delete v1.0.2 --cleanup-tag --yes --repo $repo
-            Write-Host "Removed broken v1.0.2 release and tag from $repo"
-          } else {
-            Write-Host "v1.0.2 release not found; nothing to remove"
-          }
+          ./scripts/publish_release.ps1 -Version $env:RELEASE_VERSION -Tag $env:RELEASE_TAG -Repository $env:TARGET_REPOSITORY

@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import '../models/global_config.dart';
+import '../platform/desktop_platform.dart';
 import '../utils/app_paths.dart';
 import '../utils/path_guard.dart';
+import 'cloudflared_login_output.dart';
+import 'cloudflared_tunnel_setup.dart';
 import 'tunnel_service.dart';
 
 const cloudflaredVersion = '2026.7.2';
@@ -35,8 +38,6 @@ class DownloadProgress {
 
 /// 首次配置向导使用的服务：cloudflared 安装、Cloudflare 登录、Tunnel 创建与 DNS
 class SetupService {
-  static final _uuidRegex = RegExp(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}');
-
   Future<String> get cloudflaredPath => AppPaths.cloudflaredPath;
 
   String normalizeDomain(String domain) {
@@ -89,6 +90,13 @@ class SetupService {
 
   Future<void> downloadCloudflared({void Function(DownloadProgress)? onProgress}) async {
     final targetPath = await cloudflaredPath;
+    if (await desktopPlatform.installCloudflared(
+      source: Uri.parse(_downloadUrl),
+      targetPath: targetPath,
+      onProgress: (received, total) => onProgress?.call(DownloadProgress(received, total)),
+    )) {
+      return;
+    }
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
 
     try {
@@ -129,7 +137,12 @@ class SetupService {
   }
 
   /// 使用当前应用环境独立的 cert.pem 登录；[force] 用于切换 Zone 时重新授权。
-  Future<CloudflareLoginResult> loginCloudflare(String bin, {bool force = false}) async {
+  Future<CloudflareLoginResult> loginCloudflare(
+    String bin, {
+    bool force = false,
+    void Function(String?)? onLoginUrl,
+  }) async {
+    onLoginUrl?.call(null);
     await migrateLegacyCloudflareCredentials();
     final certFile = File(await AppPaths.originCertPath);
     if (await certFile.exists() && !force) {
@@ -154,24 +167,13 @@ class SetupService {
 
     try {
       final process = await Process.start(bin, ['tunnel', 'login'], environment: environment);
-      final output = StringBuffer();
-      final urlRegex = RegExp(r'https://[^\s"]+');
-      var opened = false;
-
-      void scan(String text) {
-        output.write(text);
-        if (opened) return;
-        final url = urlRegex.firstMatch(text)?.group(0);
-        if (url == null) return;
-        if (!url.contains('cloudflare') && !url.contains('dash')) return;
-        opened = true;
-        openUrl(url);
-      }
-
-      process.stdout.listen((data) => scan(TextDecode.bytes(data)));
-      process.stderr.listen((data) => scan(TextDecode.bytes(data)));
-
-      final exitCode = await process.exitCode;
+      // 自动打开只交给 cloudflared。应用仅提供完整链接供用户手动复制，避免重复标签页。
+      final output = CloudflaredLoginOutput(onLoginUrl: onLoginUrl);
+      final results = await Future.wait<Object>([
+        process.exitCode,
+        output.collect(process.stdout, process.stderr),
+      ]);
+      final exitCode = results[0] as int;
       if (await generatedCert.exists()) {
         await certFile.parent.create(recursive: true);
         if (await certFile.exists()) await certFile.delete();
@@ -183,13 +185,14 @@ class SetupService {
       if (backup != null && await backup.exists()) {
         await backup.rename(certFile.path);
       }
-      return CloudflareLoginResult.failed('登录未完成 (exit $exitCode)：$output');
+      return CloudflareLoginResult.failed('登录未完成 (exit $exitCode)：${results[1]}');
     } catch (_) {
       if (backup != null && await backup.exists() && !await certFile.exists()) {
         await backup.rename(certFile.path);
       }
       rethrow;
     } finally {
+      onLoginUrl?.call(null);
       if (await loginHome.exists()) {
         try {
           await loginHome.delete(recursive: true);
@@ -200,53 +203,25 @@ class SetupService {
 
   Future<String> createTunnel(String bin, String tunnelName) async {
     final originCert = await _requireOriginCert();
-    final pendingCredentials = File(p.join(await AppPaths.cloudflareDir, '.pending-tunnel.json'));
-    if (await pendingCredentials.exists()) await pendingCredentials.delete();
-
-    Object? createError;
+    final staging = await Directory(await AppPaths.cloudflareDir).createTemp('.create-tunnel-');
+    final pending = File(p.join(staging.path, 'credentials.json'));
     try {
-      try {
-        final output = await CloudflaredCli.run(bin, [
-          'tunnel',
-          '--origincert',
-          originCert,
-          'create',
-          '--credentials-file',
-          pendingCredentials.path,
-          tunnelName,
-        ]);
-        final created = _uuidRegex.firstMatch(output)?.group(0);
-        if (created != null) {
-          await _adoptTunnelCredentials(created, pendingCredentials);
-          return created;
-        }
-      } catch (error) {
-        createError = error;
-      }
-
-      try {
-        final list = await CloudflaredCli.run(bin, ['tunnel', '--origincert', originCert, 'list']);
-        for (final line in list.split('\n')) {
-          if (!line.contains(tunnelName)) continue;
-          final existing = _uuidRegex.firstMatch(line)?.group(0);
-          if (existing == null) continue;
-          final hasCredentials = await _adoptTunnelCredentials(existing, pendingCredentials);
-          if (!hasCredentials) {
-            throw Exception('已找到 Tunnel $existing，但本机缺少对应 credentials 文件');
-          }
-          return existing;
-        }
-      } catch (_) {
-        if (createError != null) throw createError;
-        rethrow;
-      }
-
-      if (createError != null) throw createError;
-      throw Exception('创建 Tunnel 失败，且未在列表中找到 $tunnelName');
+      return await CloudflaredTunnelSetup(
+        run: (args) =>
+            CloudflaredCli.runDetailed(bin, ['tunnel', '--origincert', originCert, ...args]),
+        adoptCreatedCredentials: (id) => _adoptTunnelCredentials(id, pending),
+        hasExistingCredentials: (id) async =>
+            await ensureTunnelCredentials(id) &&
+            await CloudflaredTunnelSetup.credentialsMatch(
+              File(await AppPaths.credentialsPath(id)),
+              id,
+            ),
+      ).create(tunnelName, pending.path);
     } finally {
-      if (await pendingCredentials.exists()) {
+      // 创建后若凭据收纳失败，保留文件供恢复，不能删掉远端 Tunnel 唯一的运行凭据。
+      if (!await pending.exists()) {
         try {
-          await pendingCredentials.delete();
+          await staging.delete(recursive: true);
         } catch (_) {}
       }
     }
@@ -287,13 +262,18 @@ class SetupService {
 
   /// 创建或修复 DNS；Zone 不匹配或权限错误时强制重新授权一次，
   /// 最终还要通过 1.1.1.1 DoH 验证真实域名已经可解析。
-  Future<void> ensureDnsRoute(String bin, String tunnelId, String domain) async {
+  Future<void> ensureDnsRoute(
+    String bin,
+    String tunnelId,
+    String domain, {
+    void Function(String?)? onLoginUrl,
+  }) async {
     try {
       await routeDns(bin, tunnelId, domain);
     } catch (error) {
       if (!_shouldReloginForDns('$error')) rethrow;
 
-      final login = await loginCloudflare(bin, force: true);
+      final login = await loginCloudflare(bin, force: true, onLoginUrl: onLoginUrl);
       if (!login.success) {
         throw Exception(login.error ?? 'Cloudflare 重新授权未完成');
       }
@@ -403,13 +383,13 @@ class SetupService {
 
   Future<bool> _adoptTunnelCredentials(String tunnelId, File pendingCredentials) async {
     final target = File(await AppPaths.credentialsPath(tunnelId));
-    if (await target.exists()) return true;
-    if (await pendingCredentials.exists()) {
+    if (await CloudflaredTunnelSetup.credentialsMatch(pendingCredentials, tunnelId)) {
       await target.parent.create(recursive: true);
       await pendingCredentials.rename(target.path);
       return true;
     }
-    return ensureTunnelCredentials(tunnelId);
+    return await ensureTunnelCredentials(tunnelId) &&
+        await CloudflaredTunnelSetup.credentialsMatch(target, tunnelId);
   }
 
   Future<GlobalConfig> writeTunnelConfig(GlobalConfig config, String tunnelId) async {
@@ -450,9 +430,10 @@ class SetupService {
   static const githubReleasesUrl = 'https://github.com/cloudflare/cloudflared/releases/latest';
 
   String get githubAssetName {
+    final platformAsset = desktopPlatform.cloudflaredAssetName;
+    if (platformAsset != null) return platformAsset;
     if (Platform.isWindows) return 'cloudflared-windows-amd64.exe';
     final arch = _isArm64 ? 'arm64' : 'amd64';
-    if (Platform.isMacOS) return 'cloudflared-darwin-$arch.tgz';
     return 'cloudflared-linux-$arch';
   }
 

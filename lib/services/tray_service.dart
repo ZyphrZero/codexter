@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:tray_manager/tray_manager.dart' as tray;
 import 'package:window_manager/window_manager.dart';
 import '../app_info.dart';
+import '../platform/desktop_platform.dart';
 
 /// Windows 使用系统托盘，macOS 使用菜单栏状态图标；后台运行时服务与 MCP 进程继续运行。
 class TrayService with tray.TrayListener {
@@ -16,8 +17,10 @@ class TrayService with tray.TrayListener {
 
   Future<void> initialize() async {
     if (_initialized || (!Platform.isWindows && !Platform.isMacOS)) return;
-    final iconPath = await _materializeIcon();
-    await tray.trayManager.setIcon(iconPath, isTemplate: Platform.isMacOS, iconSize: 18);
+    if (!await desktopPlatform.configureTrayIcon()) {
+      final iconPath = await _materializeIcon();
+      await tray.trayManager.setIcon(iconPath, isTemplate: false, iconSize: 18);
+    }
     await tray.trayManager.setToolTip(appName);
     await tray.trayManager.setContextMenu(
       tray.Menu(

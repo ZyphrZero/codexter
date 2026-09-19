@@ -217,7 +217,7 @@ class TunnelStep extends StatelessWidget {
         const Gap(AppSpacing.lg),
         const AppNotice(
           message: '点击「下一步」会依次完成：Cloudflare 登录、创建 Tunnel、配置 DNS、写入配置文件。',
-          detail: '若浏览器未自动打开，请在弹出的终端提示中手动完成授权。',
+          detail: '授权时由 cloudflared 自动打开浏览器；未打开时可复制界面提供的完整授权链接。',
         ),
       ],
     );

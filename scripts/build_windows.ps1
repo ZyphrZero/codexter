@@ -53,8 +53,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'flutter config --enable-windows-desktop failed' }
 
     Write-Host '==> Resolving Flutter dependencies...'
-    flutter pub get
-    if ($LASTEXITCODE -ne 0) { throw 'flutter pub get failed' }
+    flutter pub get --enforce-lockfile
+    if ($LASTEXITCODE -ne 0) { throw 'flutter pub get --enforce-lockfile failed' }
 
     if (-not $SkipAnalyze) {
         Write-Host '==> Running flutter analyze...'
@@ -63,7 +63,7 @@ try {
     }
 
     Write-Host '==> Building Windows release...'
-    $buildArgs = @('build', 'windows', '--release')
+    $buildArgs = @('build', 'windows', '--release', '--no-pub')
     if ($UpdateManifestUrl) {
         $buildArgs += "--dart-define=UPDATE_MANIFEST_URL=$UpdateManifestUrl"
         Write-Host "==> Update manifest: $UpdateManifestUrl"
