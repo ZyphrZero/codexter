@@ -26,6 +26,10 @@ class SummaryTools {
 
       return ToolResult.text(
         summary,
+        localFilePreviews: [
+          for (final change in fileChanges.files)
+            if (change.preview != null) change.preview!,
+        ],
         structured: {
           'title': title,
           'summary': summary,

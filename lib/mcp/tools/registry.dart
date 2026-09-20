@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../../models/file_diff_snapshot.dart';
 import '../ui/mcp_ui_catalog.dart';
 
 class ToolSchema {
@@ -89,10 +90,22 @@ class ToolResult {
   final Map<String, dynamic>? structuredContent;
   final Map<String, dynamic>? meta;
   final bool isError;
+  // 仅传递给桌面日志层，绝不放进 content、structuredContent 或 _meta。
+  final List<FileDiffSnapshot> localFilePreviews;
 
-  ToolResult({required this.content, this.structuredContent, this.meta, this.isError = false});
+  ToolResult({
+    required this.content,
+    this.structuredContent,
+    this.meta,
+    this.isError = false,
+    this.localFilePreviews = const [],
+  });
 
-  factory ToolResult.text(String text, {Map<String, dynamic>? structured}) {
+  factory ToolResult.text(
+    String text, {
+    Map<String, dynamic>? structured,
+    List<FileDiffSnapshot> localFilePreviews = const [],
+  }) {
     final safeText = text.isEmpty ? '(empty)' : text;
     final merged = structured == null ? null : {...structured, 'text': safeText};
     return ToolResult(
@@ -100,6 +113,7 @@ class ToolResult {
         {'type': 'text', 'text': safeText},
       ],
       structuredContent: merged,
+      localFilePreviews: localFilePreviews,
     );
   }
 
@@ -132,6 +146,7 @@ class ToolResult {
       structuredContent: structuredContent,
       meta: {...?meta, ...patch},
       isError: isError,
+      localFilePreviews: localFilePreviews,
     );
   }
 

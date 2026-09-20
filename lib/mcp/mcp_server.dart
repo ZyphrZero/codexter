@@ -143,7 +143,7 @@ class WorkspaceHandler {
 
     JsonRpcResponse response;
     try {
-      response = await _dispatch(rpcRequest);
+      response = await _dispatch(rpcRequest, entry);
     } on ToolArgError catch (error) {
       response = JsonRpcResponse.failure(rpcRequest.id, JsonRpcError.params(error.message));
     } catch (error) {
@@ -164,7 +164,7 @@ class WorkspaceHandler {
     return json;
   }
 
-  Future<JsonRpcResponse> _dispatch(JsonRpcRequest rpcRequest) async {
+  Future<JsonRpcResponse> _dispatch(JsonRpcRequest rpcRequest, McpLogEntry entry) async {
     switch (rpcRequest.method) {
       case 'server/discover':
         return JsonRpcResponse.success(rpcRequest.id, _discoverResult());
@@ -182,7 +182,7 @@ class WorkspaceHandler {
           'cacheScope': 'public',
         });
       case 'tools/call':
-        return _callTool(rpcRequest);
+        return _callTool(rpcRequest, entry);
       case 'resources/list':
         return JsonRpcResponse.success(rpcRequest.id, {
           'resources': _resourceList(),
@@ -245,7 +245,7 @@ class WorkspaceHandler {
     };
   }
 
-  Future<JsonRpcResponse> _callTool(JsonRpcRequest rpcRequest) async {
+  Future<JsonRpcResponse> _callTool(JsonRpcRequest rpcRequest, McpLogEntry entry) async {
     final toolName = rpcRequest.toolName;
     if (toolName == null) {
       return JsonRpcResponse.failure(rpcRequest.id, JsonRpcError.params('name is required'));
@@ -261,6 +261,9 @@ class WorkspaceHandler {
 
     try {
       final result = await tools.invoke(toolName, rpcRequest.arguments);
+      if (result.localFilePreviews.isNotEmpty) {
+        logStore.attachFilePreviews(entry, result.localFilePreviews);
+      }
       return JsonRpcResponse.success(rpcRequest.id, result.toMcpResult());
     } on ToolArgError catch (error) {
       final result = tools.decorateResult(

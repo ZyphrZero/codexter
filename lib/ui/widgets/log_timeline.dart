@@ -21,6 +21,9 @@ class LogTimeline extends StatefulWidget {
   final int tabIndex;
   final ValueChanged<int> onTabChanged;
   final VoidCallback? onClear;
+  final void Function(McpLogEntry, String)? onPreviewFile;
+  final String? previewEntryId;
+  final String? previewPath;
 
   const LogTimeline({
     super.key,
@@ -31,6 +34,9 @@ class LogTimeline extends StatefulWidget {
     required this.tabIndex,
     required this.onTabChanged,
     this.onClear,
+    this.onPreviewFile,
+    this.previewEntryId,
+    this.previewPath,
   });
 
   @override
@@ -286,7 +292,16 @@ class _LogTimelineState extends State<LogTimeline> {
                           itemBuilder: (context, index) {
                             final entry = entries[index];
                             if (entry.toolName == 'summary') {
-                              return _SummaryLogPanel(entry: entry);
+                              return _SummaryLogPanel(
+                                key: ValueKey(entry.id),
+                                entry: entry,
+                                onPreviewFile: widget.onPreviewFile == null
+                                    ? null
+                                    : (path) => widget.onPreviewFile!(entry, path),
+                                selectedPath: widget.previewEntryId == entry.id
+                                    ? widget.previewPath
+                                    : null,
+                              );
                             }
                             final expanded = _expandedId == entry.id;
                             void onToggle() => setState(() {
@@ -447,7 +462,10 @@ class _NewContentButton extends StatelessWidget {
 class _SummaryLogPanel extends StatelessWidget {
   final McpLogEntry entry;
 
-  const _SummaryLogPanel({required this.entry});
+  final ValueChanged<String>? onPreviewFile;
+  final String? selectedPath;
+
+  const _SummaryLogPanel({super.key, required this.entry, this.onPreviewFile, this.selectedPath});
 
   @override
   Widget build(BuildContext context) {
@@ -515,14 +533,24 @@ class _SummaryLogPanel extends StatelessWidget {
                         ? Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(title, style: AppTones.title(theme, size: 14)),
+                              Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppTones.title(theme, size: 14),
+                              ),
                               const Gap(3),
                               Text('正在整理本轮结果', style: AppTones.muted(theme, size: 11)),
                             ],
                           )
                         : Align(
                             alignment: Alignment.centerLeft,
-                            child: Text(title, style: AppTones.title(theme, size: 14)),
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTones.title(theme, size: 14),
+                            ),
                           ),
                   ),
                 ),
@@ -539,7 +567,12 @@ class _SummaryLogPanel extends StatelessWidget {
             ],
             if (fileChanges != null && fileChanges.files.isNotEmpty) ...[
               const Gap(AppSpacing.md),
-              _RoundFileChanges(data: fileChanges),
+              _RoundFileChanges(
+                data: fileChanges,
+                entry: entry,
+                onPreviewFile: onPreviewFile,
+                selectedPath: selectedPath,
+              ),
             ],
           ],
         ),
@@ -560,7 +593,16 @@ const _roundDiffColumnWidth = 38.0;
 class _RoundFileChanges extends StatefulWidget {
   final _RoundFileChangeData data;
 
-  const _RoundFileChanges({required this.data});
+  final McpLogEntry entry;
+  final ValueChanged<String>? onPreviewFile;
+  final String? selectedPath;
+
+  const _RoundFileChanges({
+    required this.data,
+    required this.entry,
+    this.onPreviewFile,
+    this.selectedPath,
+  });
 
   @override
   State<_RoundFileChanges> createState() => _RoundFileChangesState();
@@ -635,7 +677,22 @@ class _RoundFileChangesState extends State<_RoundFileChanges> {
           ),
           Divider(height: 1, color: AppTones.borderSubtle(theme)),
           for (var index = 0; index < visible.length; index++) ...[
-            _RoundFileChangeRow(item: visible[index]),
+            _RoundFileChangeRow(
+              item: visible[index],
+              selected: widget.selectedPath == visible[index].path,
+              unavailableReason:
+                  widget.entry.filePreviews[visible[index].path]?.unavailableReason ??
+                  (widget.entry.filePreviews[visible[index].path]?.canPreview == true
+                      ? null
+                      : widget.entry.previewsExpired
+                      ? '本轮快照已释放，无法预览历史内容'
+                      : '该总结没有历史文件快照'),
+              onPreview:
+                  widget.entry.filePreviews[visible[index].path]?.canPreview == true &&
+                      widget.onPreviewFile != null
+                  ? () => widget.onPreviewFile!(visible[index].path)
+                  : null,
+            ),
             if (index != visible.length - 1 || hasMore)
               Divider(height: 1, color: AppTones.borderSubtle(theme)),
           ],
@@ -673,7 +730,16 @@ class _RoundFileChangesState extends State<_RoundFileChanges> {
 class _RoundFileChangeRow extends StatelessWidget {
   final _RoundFileChangeItem item;
 
-  const _RoundFileChangeRow({required this.item});
+  final bool selected;
+  final String? unavailableReason;
+  final VoidCallback? onPreview;
+
+  const _RoundFileChangeRow({
+    required this.item,
+    this.selected = false,
+    this.unavailableReason,
+    this.onPreview,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -688,80 +754,122 @@ class _RoundFileChangeRow extends StatelessWidget {
       'deleted' => theme.colorScheme.destructive,
       _ => AppTones.info,
     };
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 18,
-            child: Text(
-              statusLabel,
-              style: AppTones.mono(theme, size: 10, color: statusColor, weight: FontWeight.w600),
+    return AppTooltip(
+      message: unavailableReason ?? '预览本轮文件差异',
+      child: Semantics(
+        button: onPreview != null,
+        selected: selected,
+        child: FocusableActionDetector(
+          enabled: onPreview != null,
+          shortcuts: const {
+            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+            SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+          },
+          actions: {
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) {
+                onPreview?.call();
+                return null;
+              },
             ),
-          ),
-          const Gap(AppSpacing.xs),
-          Expanded(
-            child: Text(
-              item.path,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppTones.mono(theme, size: 10, color: theme.colorScheme.foreground),
-            ),
-          ),
-          SizedBox(
-            width: _roundCopyColumnWidth,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: AppTooltip(
-                message: '复制文件路径',
-                alignment: Alignment.bottomCenter,
-                anchorAlignment: Alignment.topCenter,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: item.path));
-                      AppToast.info(context, '已复制文件路径');
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: Icon(
-                        BootstrapIcons.copy,
-                        size: 10,
-                        color: theme.colorScheme.mutedForeground,
+          },
+          child: MouseRegion(
+            cursor: onPreview == null ? MouseCursor.defer : SystemMouseCursors.click,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onPreview,
+              child: Container(
+                color: selected ? AppTones.navigationSelected(theme) : null,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.md,
+                  vertical: AppSpacing.sm,
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      child: Text(
+                        statusLabel,
+                        style: AppTones.mono(
+                          theme,
+                          size: 10,
+                          color: statusColor,
+                          weight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ),
+                    const Gap(AppSpacing.xs),
+                    Expanded(
+                      child: Text(
+                        item.path,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTones.mono(theme, size: 10, color: theme.colorScheme.foreground),
+                      ),
+                    ),
+                    SizedBox(
+                      width: _roundCopyColumnWidth,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: AppTooltip(
+                          message: '复制文件路径',
+                          alignment: Alignment.bottomCenter,
+                          anchorAlignment: Alignment.topCenter,
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.click,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () {
+                                Clipboard.setData(ClipboardData(text: item.path));
+                                AppToast.info(context, '已复制文件路径');
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(
+                                  BootstrapIcons.copy,
+                                  size: 10,
+                                  color: theme.colorScheme.mutedForeground,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: _roundDiffColumnWidth,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: item.additions > 0
+                            ? Text(
+                                '+${item.additions}',
+                                style: AppTones.mono(theme, size: 10, color: AppTones.success),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ),
+                    SizedBox(
+                      width: _roundDiffColumnWidth,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: item.deletions > 0
+                            ? Text(
+                                '-${item.deletions}',
+                                style: AppTones.mono(
+                                  theme,
+                                  size: 10,
+                                  color: theme.colorScheme.destructive,
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
-          SizedBox(
-            width: _roundDiffColumnWidth,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: item.additions > 0
-                  ? Text(
-                      '+${item.additions}',
-                      style: AppTones.mono(theme, size: 10, color: AppTones.success),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-          ),
-          SizedBox(
-            width: _roundDiffColumnWidth,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: item.deletions > 0
-                  ? Text(
-                      '-${item.deletions}',
-                      style: AppTones.mono(theme, size: 10, color: theme.colorScheme.destructive),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

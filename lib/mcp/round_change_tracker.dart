@@ -1,4 +1,6 @@
 import 'dart:io';
+import '../models/file_diff_snapshot.dart';
+import '../utils/text_diff.dart';
 import 'package:path/path.dart' as p;
 
 /// 一轮对话内由写入工具造成的文件净变更。
@@ -7,12 +9,14 @@ class RoundFileChange {
   final String status;
   final int additions;
   final int deletions;
+  final FileDiffSnapshot? preview;
 
   const RoundFileChange({
     required this.path,
     required this.status,
     required this.additions,
     required this.deletions,
+    this.preview,
   });
 
   Map<String, dynamic> toJson() => {
@@ -74,12 +78,17 @@ class RoundChangeTracker {
 
   /// 生成当前轮次的净变更并清空状态，供下一轮重新记录基线。
   RoundChangeSet takeAndReset() {
+    final tracked = _files.values.toList(growable: false);
+    _files.clear();
+    return _buildChangeSet(tracked);
+  }
+
+  static RoundChangeSet _buildChangeSet(List<_TrackedFile> trackedFiles) {
     final changes = <RoundFileChange>[];
-    for (final tracked in _files.values) {
+    for (final tracked in trackedFiles) {
       final change = _buildChange(tracked);
       if (change != null) changes.add(change);
     }
-    _files.clear();
     changes.sort((left, right) => left.path.compareTo(right.path));
     return RoundChangeSet(List.unmodifiable(changes));
   }
@@ -97,94 +106,32 @@ class RoundChangeTracker {
         : !tracked.finalExists
         ? 'deleted'
         : 'modified';
-    final stats = _lineDiff(before, after);
+    final reason = FileDiffSnapshot.unsupportedReason(
+      tracked.path,
+      tracked.originalExists ? tracked.originalContent : '',
+      tracked.finalExists ? tracked.finalContent : '',
+    );
+    final diff = reason == null ? TextDiff.calculate(before, after) : null;
+    final stats = diff == null
+        ? TextDiff.countChanges(before, after)
+        : (diff.additions, diff.deletions);
     return RoundFileChange(
       path: tracked.path,
       status: status,
       additions: stats.$1,
       deletions: stats.$2,
+      preview: FileDiffSnapshot(
+        path: tracked.path,
+        status: status,
+        before: reason == null ? before : null,
+        after: reason == null ? after : null,
+        diff: diff,
+        unavailableReason: reason,
+      ),
     );
   }
 
-  /// 返回 (新增行, 删除行)。使用 Myers 最短编辑距离，适合代码文件的局部修改。
-  static (int, int) _lineDiff(String before, String after) {
-    final left = _lines(before);
-    final right = _lines(after);
-
-    var prefix = 0;
-    final commonLength = left.length < right.length ? left.length : right.length;
-    while (prefix < commonLength && left[prefix] == right[prefix]) {
-      prefix++;
-    }
-
-    var leftEnd = left.length;
-    var rightEnd = right.length;
-    while (leftEnd > prefix && rightEnd > prefix && left[leftEnd - 1] == right[rightEnd - 1]) {
-      leftEnd--;
-      rightEnd--;
-    }
-
-    final leftCount = leftEnd - prefix;
-    final rightCount = rightEnd - prefix;
-    if (leftCount == 0) return (rightCount, 0);
-    if (rightCount == 0) return (0, leftCount);
-
-    final distance = _myersDistance(
-      left,
-      right,
-      leftStart: prefix,
-      leftCount: leftCount,
-      rightStart: prefix,
-      rightCount: rightCount,
-    );
-    final common = (leftCount + rightCount - distance) ~/ 2;
-    return (rightCount - common, leftCount - common);
-  }
-
-  static int _myersDistance(
-    List<String> left,
-    List<String> right, {
-    required int leftStart,
-    required int leftCount,
-    required int rightStart,
-    required int rightCount,
-  }) {
-    final max = leftCount + rightCount;
-    final offset = max;
-    final furthest = List<int>.filled(max * 2 + 1, 0);
-
-    for (var distance = 0; distance <= max; distance++) {
-      for (var diagonal = -distance; diagonal <= distance; diagonal += 2) {
-        final index = offset + diagonal;
-        int x;
-        if (diagonal == -distance ||
-            (diagonal != distance && furthest[index - 1] < furthest[index + 1])) {
-          x = furthest[index + 1];
-        } else {
-          x = furthest[index - 1] + 1;
-        }
-
-        var y = x - diagonal;
-        while (x < leftCount && y < rightCount && left[leftStart + x] == right[rightStart + y]) {
-          x++;
-          y++;
-        }
-        furthest[index] = x;
-        if (x >= leftCount && y >= rightCount) return distance;
-      }
-    }
-    return max;
-  }
-
-  static List<String> _lines(String text) {
-    if (text.isEmpty) return const [];
-    final lines = _normalizeText(text).split('\n');
-    if (lines.isNotEmpty && lines.last.isEmpty) lines.removeLast();
-    return lines;
-  }
-
-  static String _normalizeText(String value) =>
-      value.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  static String _normalizeText(String value) => TextDiff.normalize(value);
 
   static String _pathKey(String value) {
     final normalized = p.normalize(value);

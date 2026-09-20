@@ -1,5 +1,8 @@
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import '../../stores/app_state.dart';
+import '../../models/mcp_log_entry.dart';
+import '../widgets/file_diff_panel.dart';
+import '../widgets/workspace_diff_layout.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import '../widgets/app_spacing.dart';
@@ -21,6 +24,42 @@ class WorkspaceDetailPage extends StatefulWidget {
 
 class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
   int _tabIndex = 0;
+  String? _workspaceUuid;
+  String? _previewEntryId;
+  String? _previewPath;
+  bool _previewExpanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _workspaceUuid = widget.appState.selectedWorkspaceUuid;
+  }
+
+  @override
+  void didUpdateWidget(covariant WorkspaceDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final current = widget.appState.selectedWorkspaceUuid;
+    if (current == _workspaceUuid) return;
+    _workspaceUuid = current;
+    _previewEntryId = null;
+    _previewPath = null;
+    _previewExpanded = false;
+  }
+
+  void _openPreview(McpLogEntry entry, String path) {
+    if (entry.filePreviews[path]?.canPreview != true) return;
+    setState(() {
+      if (_previewEntryId != entry.id) _previewExpanded = false;
+      _previewEntryId = entry.id;
+      _previewPath = path;
+    });
+  }
+
+  void _closePreview() => setState(() {
+    _previewEntryId = null;
+    _previewPath = null;
+    _previewExpanded = false;
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -33,6 +72,16 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
     final live = appState.isWorkspaceLive(workspace.uuid);
     final handler = appState.mcpServer.handlerOf(workspace.uuid);
     final stats = appState.workspaceStats(workspace.uuid);
+    final logs = appState.workspaceLogs(workspace.uuid);
+    McpLogEntry? previewEntry;
+    for (final entry in logs) {
+      if (entry.id == _previewEntryId) {
+        previewEntry = entry;
+        break;
+      }
+    }
+    final preview = previewEntry?.filePreviews[_previewPath];
+    final previewAvailable = preview?.canPreview == true;
 
     return AppPageScaffold(
       leading: AppBackButton(onPressed: appState.backToHome),
@@ -51,27 +100,45 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
           onConnect: () => McpConnectionDialog.show(context, appState.workspaceUrl(workspace.uuid)),
         ),
       ],
-      child: _tabIndex == 0
-          ? LogTimeline(
-              entries: appState.workspaceLogs(workspace.uuid),
-              toolCalls: stats.toolCalls,
-              errorCount: stats.errors,
-              processCount: appState.runningProcessCount(workspace.uuid),
-              tabIndex: _tabIndex,
-              onTabChanged: (index) => setState(() => _tabIndex = index),
-              onClear: () {
-                appState.clearWorkspaceLogs(workspace.uuid);
-                AppToast.success(context, '日志已清除');
-              },
-            )
-          : TerminalPanel(
-              processManager: handler?.processManager,
-              toolCalls: stats.toolCalls,
-              errorCount: stats.errors,
-              processCount: appState.runningProcessCount(workspace.uuid),
-              tabIndex: _tabIndex,
-              onTabChanged: (index) => setState(() => _tabIndex = index),
-            ),
+      child: WorkspaceDiffLayout(
+        expanded: _previewExpanded,
+        preview: previewAvailable
+            ? FileDiffPanel(
+                snapshot: preview!,
+                files: previewEntry!.filePreviews.values.where((file) => file.canPreview).toList(),
+                roundLabel: previewEntry.clockText,
+                onSelectFile: (path) => _openPreview(previewEntry!, path),
+                onClose: _closePreview,
+                expanded: _previewExpanded,
+                onToggleExpanded: () => setState(() => _previewExpanded = !_previewExpanded),
+              )
+            : null,
+        child: _tabIndex == 0
+            ? LogTimeline(
+                entries: logs,
+                onPreviewFile: _openPreview,
+                previewEntryId: previewAvailable ? _previewEntryId : null,
+                previewPath: previewAvailable ? _previewPath : null,
+                toolCalls: stats.toolCalls,
+                errorCount: stats.errors,
+                processCount: appState.runningProcessCount(workspace.uuid),
+                tabIndex: _tabIndex,
+                onTabChanged: (index) => setState(() => _tabIndex = index),
+                onClear: () {
+                  _closePreview();
+                  appState.clearWorkspaceLogs(workspace.uuid);
+                  AppToast.success(context, '日志已清除');
+                },
+              )
+            : TerminalPanel(
+                processManager: handler?.processManager,
+                toolCalls: stats.toolCalls,
+                errorCount: stats.errors,
+                processCount: appState.runningProcessCount(workspace.uuid),
+                tabIndex: _tabIndex,
+                onTabChanged: (index) => setState(() => _tabIndex = index),
+              ),
+      ),
     );
   }
 }

@@ -1,4 +1,5 @@
 import '../utils/fmt.dart';
+import 'file_diff_snapshot.dart';
 
 enum McpLogKind { request, tunnel, server, workspace }
 
@@ -15,6 +16,9 @@ class McpLogEntry {
   bool pending;
   bool success;
   String? error;
+  // 本地预览与日志同生命周期，过期或清除时由 LogStore 释放。
+  Map<String, FileDiffSnapshot> filePreviews = const {};
+  bool previewsExpired = false;
 
   McpLogEntry({
     required this.id,
