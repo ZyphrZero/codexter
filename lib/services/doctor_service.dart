@@ -4,6 +4,7 @@ import 'dart:io';
 import '../models/global_config.dart';
 import '../models/workspace.dart';
 import '../utils/app_paths.dart';
+import 'network_proxy.dart';
 import 'setup_service.dart';
 import 'tunnel_error_classifier.dart';
 
@@ -283,7 +284,7 @@ class DoctorService {
       return const DoctorCheck(title: '公网连通性', state: DoctorState.warn, detail: '跳过（未启用公网访问）');
     }
 
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    final client = NetworkProxy.createHttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final request = await client.getUrl(Uri.parse('https://${config.domain}/healthz'));
       final response = await request.close().timeout(const Duration(seconds: 10));

@@ -11,11 +11,14 @@ import 'app_spacing.dart';
 import 'app_toast.dart';
 import 'cloudflare_login_notice.dart';
 import 'json_view.dart';
+import 'proxy_settings_form.dart';
 
 class SettingsDialog {
   const SettingsDialog._();
 
-  static Future<void> show(BuildContext context, AppState appState) {
+  static const networkProxySection = 3;
+
+  static Future<void> show(BuildContext context, AppState appState, {int initialSection = 0}) {
     return showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -64,7 +67,10 @@ class SettingsDialog {
                         child: SizedBox(
                           width: double.infinity,
                           height: double.infinity,
-                          child: _SettingsDialogBody(appState: appState),
+                          child: _SettingsDialogBody(
+                            appState: appState,
+                            initialSection: initialSection,
+                          ),
                         ),
                       ),
                     ),
@@ -82,8 +88,9 @@ class SettingsDialog {
 
 class _SettingsDialogBody extends StatefulWidget {
   final AppState appState;
+  final int initialSection;
 
-  const _SettingsDialogBody({required this.appState});
+  const _SettingsDialogBody({required this.appState, required this.initialSection});
 
   @override
   State<_SettingsDialogBody> createState() => _SettingsDialogBodyState();
@@ -96,7 +103,9 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
   late final TextEditingController _portController;
   late final TextEditingController _tunnelNameController;
   late bool _useCloudflared;
-  int _section = 0;
+  late bool _proxyEnabled;
+  late String _proxyUrl;
+  late int _section;
   bool _saving = false;
   String? _loginUrl;
 
@@ -106,11 +115,14 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
   void initState() {
     super.initState();
     final config = appState.config;
+    _section = widget.initialSection.clamp(0, 3);
     _domainController = TextEditingController(text: config.domain);
     _hostController = TextEditingController(text: config.host);
     _portController = TextEditingController(text: '${config.port}');
     _tunnelNameController = TextEditingController(text: config.tunnelName);
     _useCloudflared = config.useCloudflared;
+    _proxyEnabled = config.proxyEnabled;
+    _proxyUrl = config.proxyUrl;
     appState.addListener(_onAppStateChanged);
   }
 
@@ -208,6 +220,12 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
             selected: _section == 2,
             onTap: () => setState(() => _section = 2),
           ),
+          _SettingsNavItem(
+            icon: BootstrapIcons.globe,
+            label: '网络代理',
+            selected: _section == 3,
+            onTap: () => setState(() => _section = 3),
+          ),
         ],
       ),
     );
@@ -217,12 +235,14 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
     final title = switch (_section) {
       0 => '常规',
       1 => '通知',
-      _ => '公网服务',
+      2 => '公网服务',
+      _ => '网络代理',
     };
     final description = switch (_section) {
       0 => '应用运行方式和界面外观。',
       1 => '控制 ChatGPT 完成一轮处理后的提醒方式。',
-      _ => '配置本地监听与 Cloudflare Tunnel。',
+      2 => '配置本地监听与 Cloudflare Tunnel。',
+      _ => '配置 Codexter 出站 HTTP / SOCKS5 代理。',
     };
 
     final action = switch (_section) {
@@ -235,6 +255,11 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
         style: ButtonStyle.primary(size: ButtonSize.small),
         onPressed: _saving ? null : _saveAndRestart,
         child: AppButtonLabel(icon: BootstrapIcons.check2, label: _saving ? '应用中…' : '保存并重启'),
+      ),
+      3 => Button(
+        style: ButtonStyle.primary(size: ButtonSize.small),
+        onPressed: _saving ? null : _saveProxy,
+        child: AppButtonLabel(icon: BootstrapIcons.check2, label: _saving ? '保存中…' : '保存代理'),
       ),
       _ => null,
     };
@@ -254,7 +279,8 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
                   child: switch (_section) {
                     0 => _buildGeneral(context),
                     1 => _buildNotifications(context),
-                    _ => _buildNetwork(context),
+                    2 => _buildNetwork(context),
+                    _ => _buildProxy(context),
                   },
                 ),
               ),
@@ -340,6 +366,35 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
         ),
       ],
     );
+  }
+
+  Widget _buildProxy(BuildContext context) {
+    return ProxySettingsForm(
+      key: ValueKey(_proxyUrl),
+      enabled: _proxyEnabled,
+      url: _proxyUrl,
+      busy: _saving,
+      onEnabledChanged: (value) => setState(() => _proxyEnabled = value),
+      onUrlChanged: (value) => _proxyUrl = value,
+    );
+  }
+
+  Future<void> _saveProxy() async {
+    setState(() => _saving = true);
+    try {
+      await appState.saveGlobalConfig(
+        appState.config.copyWith(proxyEnabled: _proxyEnabled, proxyUrl: _proxyUrl),
+      );
+      if (!mounted) return;
+      setState(() => _proxyUrl = appState.config.proxyUrl);
+      AppToast.success(context, '代理配置已保存');
+    } on FormatException catch (error) {
+      if (mounted) AppToast.error(context, error.message);
+    } catch (error) {
+      if (mounted) AppToast.error(context, '保存代理失败：$error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   Widget _buildNetwork(BuildContext context) {
@@ -546,6 +601,11 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
           ? 'codex-mcp'
           : _tunnelNameController.text.trim();
       final login = await _setupService.loginCloudflare(bin, onLoginUrl: _updateLoginUrl);
+      if (!mounted) return;
+      if (login.authorizationPending) {
+        AppToast.info(context, '浏览器授权尚未完成，完成授权后请再次点击创建 Tunnel');
+        return;
+      }
       if (!login.success) throw Exception(login.error ?? 'Cloudflare 登录未完成');
       final tunnelId = await _setupService.createTunnel(bin, tunnelName);
       await _setupService.ensureDnsRoute(bin, tunnelId, domain, onLoginUrl: _updateLoginUrl);

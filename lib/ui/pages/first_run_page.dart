@@ -5,9 +5,11 @@ import '../../stores/app_state.dart';
 import '../../utils/app_paths.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/app_spacing.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/cloudflare_login_notice.dart';
+import '../widgets/proxy_settings_form.dart';
 import '../widgets/setup_wizard_steps.dart';
 
 /// 首次启动向导：cloudflared → 域名 → Tunnel → 完成
@@ -27,9 +29,10 @@ class _FirstRunPageState extends State<FirstRunPage> {
   final _domainController = TextEditingController();
   final _tunnelNameController = TextEditingController(text: 'codex-mcp');
 
+  late bool _proxyEnabled;
+  late String _proxyUrl;
   int _step = 0;
   bool _busy = false;
-  String? _error;
   String? _status;
   String? _loginUrl;
   String? _cloudflaredBin;
@@ -41,6 +44,8 @@ class _FirstRunPageState extends State<FirstRunPage> {
   @override
   void initState() {
     super.initState();
+    _proxyEnabled = widget.appState.config.proxyEnabled;
+    _proxyUrl = widget.appState.config.proxyUrl;
     _probeCloudflared();
   }
 
@@ -77,23 +82,14 @@ class _FirstRunPageState extends State<FirstRunPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            if (_error != null) ...[
-                              AppNotice(tone: AppNoticeTone.danger, message: _error!),
-                              const Gap(AppSpacing.lg),
-                            ],
-                            if (_status != null && _step != 0) ...[
-                              AppNotice(tone: AppNoticeTone.info, message: _status!),
-                              const Gap(AppSpacing.lg),
-                            ],
-                            if (_loginUrl != null) ...[
-                              CloudflareLoginNotice(url: _loginUrl!),
-                              const Gap(AppSpacing.lg),
-                            ],
+                            Text(_stepTitle, style: AppTones.title(theme, size: 14)),
+                            const Gap(AppSpacing.md),
                             _buildStepBody(),
                           ],
                         ),
                       ),
                     ),
+                    if (_step >= 2) _buildStepStatusSlot(theme),
                     _buildFooter(theme),
                   ],
                 ),
@@ -117,6 +113,36 @@ class _FirstRunPageState extends State<FirstRunPage> {
     );
   }
 
+  String get _stepTitle => switch (_step) {
+    0 => '第 1 步：安装 cloudflared',
+    1 => '第 2 步：公网域名',
+    2 => '第 3 步：创建 Tunnel',
+    _ => '第 4 步：完成',
+  };
+
+  Widget _buildStepStatusSlot(ThemeData theme) {
+    return SizedBox(
+      height: 48,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(AppSpacing.x2l, 0, AppSpacing.x2l, AppSpacing.md),
+        child: Align(
+          alignment: Alignment.bottomLeft,
+          child: _loginUrl != null
+              ? CloudflareLoginNotice(url: _loginUrl!)
+              : _status != null
+              ? Row(
+                  children: [
+                    const SizedBox.square(dimension: 14, child: CircularProgressIndicator()),
+                    const Gap(AppSpacing.sm),
+                    Expanded(child: Text(_status!, style: AppTones.muted(theme, size: 11.5))),
+                  ],
+                )
+              : const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader(ThemeData theme) {
     return Container(
       padding: const EdgeInsets.all(AppSpacing.x2l),
@@ -126,7 +152,22 @@ class _FirstRunPageState extends State<FirstRunPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('欢迎使用 $appName', style: AppTones.title(theme, size: 18)),
+          Row(
+            children: [
+              Expanded(child: Text('欢迎使用 $appName', style: AppTones.title(theme, size: 18))),
+              const Gap(AppSpacing.lg),
+              Button(
+                style: ButtonStyle.outline(size: ButtonSize.small),
+                onPressed: _busy ? null : _showProxySettings,
+                child: AppButtonLabel(
+                  icon: BootstrapIcons.globe,
+                  label: _proxyEnabled
+                      ? '网络代理 · ${Uri.tryParse(_proxyUrl)?.scheme.toUpperCase() ?? 'HTTP'}'
+                      : '网络代理',
+                ),
+              ),
+            ],
+          ),
           const Gap(AppSpacing.xs),
           Text('配置一次公网入口，之后每个工作区会自动获得独立的 UUID 地址。', style: AppTones.muted(theme)),
           const Gap(AppSpacing.xl),
@@ -189,6 +230,15 @@ class _FirstRunPageState extends State<FirstRunPage> {
     };
   }
 
+  Future<void> _showProxySettings() async {
+    final saved = await ProxySettingsDialog.show(context: context, appState: widget.appState);
+    if (!mounted || !saved) return;
+    setState(() {
+      _proxyEnabled = widget.appState.config.proxyEnabled;
+      _proxyUrl = widget.appState.config.proxyUrl;
+    });
+  }
+
   Future<void> _openUrl(String url) async {
     final ok = await _setupService.openUrl(url);
     if (!mounted) return;
@@ -215,12 +265,12 @@ class _FirstRunPageState extends State<FirstRunPage> {
   Future<void> _downloadCloudflared() async {
     setState(() {
       _busy = true;
-      _error = null;
       _status = null;
       _downloadFraction = 0;
     });
 
     try {
+      await _saveProxySettings();
       await _setupService.downloadCloudflared(
         onProgress: (progress) {
           if (!mounted) return;
@@ -229,7 +279,7 @@ class _FirstRunPageState extends State<FirstRunPage> {
       );
       await _probeCloudflared();
     } catch (error) {
-      if (mounted) setState(() => _error = '下载失败：$error');
+      if (mounted) AppToast.error(context, '下载失败：$error');
     } finally {
       if (mounted) {
         setState(() {
@@ -241,17 +291,25 @@ class _FirstRunPageState extends State<FirstRunPage> {
   }
 
   Future<void> _next() async {
-    setState(() {
-      _error = null;
-      _status = null;
-    });
+    setState(() => _status = null);
 
-    if (_step == 0 && _cloudflaredBin == null) {
-      setState(() => _error = '请先安装 cloudflared');
-      return;
+    if (_step == 0) {
+      try {
+        await _saveProxySettings();
+      } on FormatException catch (error) {
+        if (!mounted) return;
+        AppToast.error(context, error.message);
+        return;
+      }
+      if (!mounted) return;
+      if (_cloudflaredBin == null) {
+        AppToast.warning(context, '请先安装 cloudflared');
+        return;
+      }
     }
+    if (!mounted) return;
     if (_step == 1 && _setupService.normalizeDomain(_domainController.text).isEmpty) {
-      setState(() => _error = '请输入有效域名');
+      AppToast.warning(context, '请输入有效域名');
       return;
     }
     if (_step == 2) {
@@ -259,6 +317,13 @@ class _FirstRunPageState extends State<FirstRunPage> {
       if (!succeeded) return;
     }
     if (mounted) setState(() => _step++);
+  }
+
+  Future<void> _saveProxySettings() async {
+    await widget.appState.saveGlobalConfig(
+      widget.appState.config.copyWith(proxyEnabled: _proxyEnabled, proxyUrl: _proxyUrl),
+    );
+    _proxyUrl = widget.appState.config.proxyUrl;
   }
 
   void _updateLoginUrl(String? url) {
@@ -269,7 +334,7 @@ class _FirstRunPageState extends State<FirstRunPage> {
     if (_busy) return false;
     final bin = _cloudflaredBin;
     if (bin == null) {
-      setState(() => _error = 'cloudflared 未安装');
+      AppToast.warning(context, 'cloudflared 未安装');
       return false;
     }
 
@@ -285,11 +350,19 @@ class _FirstRunPageState extends State<FirstRunPage> {
           : _tunnelNameController.text.trim();
 
       final login = await _setupService.loginCloudflare(bin, onLoginUrl: _updateLoginUrl);
-      if (!login.success) throw Exception(login.error ?? 'Cloudflare 登录未完成');
-
       if (!mounted) return false;
-      setState(() => _status = '正在创建或复用 Tunnel…');
-      final tunnelId = await _setupService.createTunnel(bin, tunnelName);
+      if (login.authorizationPending) {
+        setState(() {
+          _busy = false;
+          _status = null;
+        });
+        AppToast.info(context, '浏览器授权尚未完成，完成授权后请再次点击「下一步」');
+        return false;
+      }
+      if (!login.success) throw Exception(login.error ?? 'Cloudflare 登录未完成');
+      setState(() => _status = '正在创建 Tunnel…');
+      final tunnelId = await _createTunnelWithConflictHandling(bin, tunnelName);
+      if (tunnelId == null) return false;
 
       setState(() => _status = '正在配置 DNS 路由…');
       await _setupService.ensureDnsRoute(bin, tunnelId, domain, onLoginUrl: _updateLoginUrl);
@@ -311,8 +384,9 @@ class _FirstRunPageState extends State<FirstRunPage> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _status = 'Tunnel 已创建：$tunnelId';
+          _status = null;
         });
+        AppToast.success(context, 'Tunnel 配置完成');
       }
       return true;
     } catch (error) {
@@ -320,10 +394,75 @@ class _FirstRunPageState extends State<FirstRunPage> {
         setState(() {
           _busy = false;
           _status = null;
-          _error = '配置失败：$error';
         });
+        AppToast.error(context, '配置失败：$error');
       }
       return false;
+    }
+  }
+
+  Future<String?> _createTunnelWithConflictHandling(String bin, String tunnelName) async {
+    try {
+      return await _setupService.createTunnel(bin, tunnelName);
+    } on TunnelNameConflictException catch (conflict) {
+      if (!mounted) return null;
+      setState(() => _status = null);
+
+      final shouldDelete = await AppDialog.show<bool>(
+        context: context,
+        title: 'Tunnel 名称已存在',
+        description: 'Cloudflare 中已经存在名为「${conflict.name}」的 Tunnel。',
+        maxWidth: 440,
+        content: Builder(
+          builder: (dialogContext) => Text(
+            '你可以返回修改一个新的名称，或者删除 Cloudflare 上现有的同名 Tunnel 后继续。'
+            '删除会中断其他正在使用该 Tunnel 的设备，并使旧凭据失效。',
+            style: AppTones.body(Theme.of(dialogContext), size: 12),
+          ),
+        ),
+        actions: (dialogContext) => [
+          Button(
+            style: ButtonStyle.outline(size: ButtonSize.normal),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('修改名称'),
+          ),
+          ButtonStyleOverride.inherit(
+            decoration: (context, states, value) {
+              if (value is! BoxDecoration) return value;
+              final color = states.contains(WidgetState.pressed)
+                  ? const Color(0xFFB91C1C)
+                  : states.contains(WidgetState.hovered)
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFFEF4444);
+              return value.copyWith(
+                color: color,
+                border: Border.all(color: color),
+              );
+            },
+            textStyle: (context, states, value) => value.copyWith(color: Colors.white),
+            child: Button(
+              style: ButtonStyle.destructive(size: ButtonSize.normal),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('删除旧 Tunnel'),
+            ),
+          ),
+        ],
+      );
+
+      if (!mounted) return null;
+      if (shouldDelete != true) {
+        setState(() {
+          _busy = false;
+          _status = null;
+        });
+        return null;
+      }
+
+      setState(() => _status = '正在删除旧 Tunnel…');
+      await _setupService.deleteTunnel(conflict.tunnelId);
+      if (!mounted) return null;
+      setState(() => _status = '正在重新创建 Tunnel…');
+      return _setupService.createTunnel(bin, tunnelName);
     }
   }
 
@@ -332,7 +471,17 @@ class _FirstRunPageState extends State<FirstRunPage> {
       _busy = true;
       _status = '正在启动服务…';
     });
-    await widget.appState.completeFirstRun(widget.appState.config);
-    if (mounted) setState(() => _busy = false);
+    try {
+      await widget.appState.completeFirstRun(widget.appState.config);
+    } catch (error) {
+      if (mounted) AppToast.error(context, '启动服务失败：$error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _status = null;
+        });
+      }
+    }
   }
 }

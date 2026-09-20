@@ -7,6 +7,7 @@ import '../../stores/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import '../widgets/app_spacing.dart';
+import '../widgets/proxy_settings_form.dart';
 
 class StartupCheckPage extends StatefulWidget {
   final AppState appState;
@@ -86,6 +87,15 @@ class _StartupCheckPageState extends State<StartupCheckPage> {
         _repairError = '$error';
       });
     }
+  }
+
+  Future<void> _showProxySettings() async {
+    final saved = await ProxySettingsDialog.show(
+      context: context,
+      appState: widget.appState,
+      description: '如果当前网络无法稳定连接 Cloudflare，可在这里配置 HTTP 或 SOCKS5 代理。',
+    );
+    if (mounted && saved) setState(() {});
   }
 
   Future<void> _repair(DoctorCheck check) async {
@@ -203,8 +213,18 @@ class _StartupCheckPageState extends State<StartupCheckPage> {
                           ],
                           const Gap(AppSpacing.lg),
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
                             children: [
+                              Button(
+                                style: ButtonStyle.outline(size: ButtonSize.normal),
+                                onPressed: _repairingTitle == null ? _showProxySettings : null,
+                                child: AppButtonLabel(
+                                  icon: BootstrapIcons.globe,
+                                  label: widget.appState.config.proxyEnabled
+                                      ? '网络代理 · ${Uri.tryParse(widget.appState.config.proxyUrl)?.scheme.toUpperCase() ?? 'HTTP'}'
+                                      : '网络代理',
+                                ),
+                              ),
+                              const Spacer(),
                               Button(
                                 style: ButtonStyle.outline(size: ButtonSize.normal),
                                 onPressed: _repairingTitle == null ? _runChecks : null,

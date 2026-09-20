@@ -5,6 +5,7 @@ import '../utils/path_guard.dart';
 import '../utils/rolling_buffer.dart';
 import '../utils/win_kill_job.dart';
 import 'tunnel_process_guard.dart';
+import 'network_proxy.dart';
 
 class TunnelReadyInfo {
   final String? location;
@@ -175,7 +176,8 @@ class TunnelService extends ChangeNotifier {
   Future<bool> verifyRoute(String publicUrl, {int attempts = 10, int timeoutMs = 5000}) async {
     final uri = Uri.parse(publicUrl);
     for (var attempt = 0; attempt < attempts; attempt++) {
-      final client = HttpClient()..connectionTimeout = Duration(milliseconds: timeoutMs);
+      final client = NetworkProxy.createHttpClient()
+        ..connectionTimeout = Duration(milliseconds: timeoutMs);
       try {
         final request = await client.getUrl(uri);
         final response = await request.close().timeout(Duration(milliseconds: timeoutMs));

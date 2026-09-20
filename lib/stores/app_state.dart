@@ -15,6 +15,7 @@ import '../platform/desktop_platform.dart';
 import '../services/capability_runtime.dart';
 import '../services/doctor_service.dart';
 import '../services/notification_service.dart';
+import '../services/network_proxy.dart';
 import '../services/setup_service.dart';
 import '../services/tunnel_error_classifier.dart';
 import '../services/tunnel_service.dart';
@@ -111,6 +112,7 @@ class AppState extends ChangeNotifier {
     await ConfigStore.init();
 
     _config = ConfigStore.getGlobalConfig();
+    NetworkProxy.configure(enabled: _config.proxyEnabled, url: _config.proxyUrl);
     await setupService.migrateLegacyCloudflareCredentials(_config.tunnelId);
     mcpServer.setWidgetDomain(_config.widgetOrigin);
     _workspaces = ConfigStore.getWorkspaces();
@@ -259,8 +261,12 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> saveGlobalConfig(GlobalConfig config) async {
+    config = config.copyWith(
+      proxyUrl: NetworkProxy.normalizeUrl(config.proxyUrl, enabled: config.proxyEnabled),
+    );
     final computerUseChanged = config.computerUseEnabled != _config.computerUseEnabled;
     _config = config;
+    NetworkProxy.configure(enabled: config.proxyEnabled, url: config.proxyUrl);
     mcpServer.setWidgetDomain(_config.widgetOrigin);
     await ConfigStore.saveGlobalConfig(config);
     if (computerUseChanged) {
@@ -447,7 +453,7 @@ class AppState extends ChangeNotifier {
   }
 
   /// 启动本地 HttpServer 并按需拉起长驻 Tunnel
-  Future<void> startServices() async {
+  Future<void> startServices({int tunnelReadyTimeoutSec = 45}) async {
     if (_busy) return;
     _busy = true;
     _lastError = null;
@@ -455,7 +461,9 @@ class AppState extends ChangeNotifier {
 
     try {
       await _startServer();
-      if (_config.useCloudflared) await _startTunnel();
+      if (_config.useCloudflared) {
+        await _startTunnel(readyTimeoutSec: tunnelReadyTimeoutSec);
+      }
     } catch (error) {
       _lastError = '$error';
       debugPrint('启动服务失败: $error');
@@ -502,7 +510,7 @@ class AppState extends ChangeNotifier {
     void Function(DoctorCheck check)? onCheckComplete,
   }) async {
     onStatus?.call('正在启动本地服务…');
-    await startServices();
+    await startServices(tunnelReadyTimeoutSec: 15);
     onStatus?.call('正在检查运行环境…');
     return doctorService.runStartup(
       config: _config,
@@ -710,7 +718,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> _startTunnel() async {
+  Future<void> _startTunnel({int readyTimeoutSec = 45}) async {
     if (_tunnelRunning) return;
     final bin = _config.cloudflaredBin ?? await AppPaths.cloudflaredPath;
     final tunnelId = _config.tunnelId;
@@ -727,6 +735,7 @@ class AppState extends ChangeNotifier {
       tunnelId: tunnelId,
       configPath: await AppPaths.cloudflaredConfigPath,
       hostname: _config.domain,
+      readyTimeoutSec: readyTimeoutSec,
     );
     _tunnelRunning = true;
   }

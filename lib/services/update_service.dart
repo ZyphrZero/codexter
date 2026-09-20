@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../app_info.dart';
 import '../utils/win_kill_job.dart';
+import 'network_proxy.dart';
 
 typedef UpdateProgress = void Function(double? fraction);
 
@@ -190,7 +191,7 @@ class AppUpdateService {
     }
   }
 
-  HttpClient _client() => HttpClient()
+  HttpClient _client() => NetworkProxy.createHttpClient()
     ..connectionTimeout = const Duration(seconds: 15)
     ..idleTimeout = const Duration(seconds: 15);
 

@@ -448,6 +448,30 @@ class _ServiceFooter extends StatelessWidget {
             value: appState.serverRunning
                 ? '${appState.config.host}:${appState.config.port}'
                 : '服务尚未启动',
+            action: appState.config.proxyEnabled
+                ? AppTooltip(
+                    message:
+                        '网络代理 · ${Uri.tryParse(appState.config.proxyUrl)?.scheme.toUpperCase() ?? 'HTTP'}\n点击打开代理设置',
+                    alignment: Alignment.bottomCenter,
+                    anchorAlignment: Alignment.topCenter,
+                    child: SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: Button(
+                        style: ButtonStyle.secondary(
+                          density: ButtonDensity.icon,
+                          size: ButtonSize.small,
+                        ),
+                        onPressed: () => SettingsDialog.show(
+                          context,
+                          appState,
+                          initialSection: SettingsDialog.networkProxySection,
+                        ),
+                        child: const Icon(BootstrapIcons.globe, size: 13, color: AppTones.success),
+                      ),
+                    ),
+                  )
+                : null,
           ),
           const Gap(AppSpacing.sm),
           _StatusCard(

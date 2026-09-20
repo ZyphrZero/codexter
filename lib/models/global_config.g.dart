@@ -32,13 +32,15 @@ class GlobalConfigAdapter extends TypeAdapter<GlobalConfig> {
       sidebarWidth: (fields[12] as num?)?.toDouble() ?? 236,
       closeActionRemembered: fields[13] as bool? ?? false,
       computerUseEnabled: fields[14] as bool? ?? false,
+      proxyEnabled: fields[15] as bool? ?? false,
+      proxyUrl: fields[16] as String? ?? '',
     );
   }
 
   @override
   void write(BinaryWriter writer, GlobalConfig obj) {
     writer
-      ..writeByte(15)
+      ..writeByte(17)
       ..writeByte(0)
       ..write(obj.domain)
       ..writeByte(1)
@@ -68,7 +70,11 @@ class GlobalConfigAdapter extends TypeAdapter<GlobalConfig> {
       ..writeByte(13)
       ..write(obj.closeActionRemembered)
       ..writeByte(14)
-      ..write(obj.computerUseEnabled);
+      ..write(obj.computerUseEnabled)
+      ..writeByte(15)
+      ..write(obj.proxyEnabled)
+      ..writeByte(16)
+      ..write(obj.proxyUrl);
   }
 
   @override

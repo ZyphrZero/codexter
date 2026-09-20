@@ -49,6 +49,12 @@ class GlobalConfig extends HiveObject {
   @HiveField(14)
   bool computerUseEnabled;
 
+  @HiveField(15, defaultValue: false)
+  bool proxyEnabled;
+
+  @HiveField(16, defaultValue: '')
+  String proxyUrl;
+
   GlobalConfig({
     this.domain = '',
     this.host = '127.0.0.1',
@@ -65,6 +71,8 @@ class GlobalConfig extends HiveObject {
     this.sidebarWidth = 236,
     this.closeActionRemembered = false,
     this.computerUseEnabled = false,
+    this.proxyEnabled = false,
+    this.proxyUrl = '',
   });
 
   String get baseUrl {
@@ -99,6 +107,8 @@ class GlobalConfig extends HiveObject {
     double? sidebarWidth,
     bool? closeActionRemembered,
     bool? computerUseEnabled,
+    bool? proxyEnabled,
+    String? proxyUrl,
   }) {
     return GlobalConfig(
       domain: domain ?? this.domain,
@@ -116,6 +126,8 @@ class GlobalConfig extends HiveObject {
       sidebarWidth: sidebarWidth ?? this.sidebarWidth,
       closeActionRemembered: closeActionRemembered ?? this.closeActionRemembered,
       computerUseEnabled: computerUseEnabled ?? this.computerUseEnabled,
+      proxyEnabled: proxyEnabled ?? this.proxyEnabled,
+      proxyUrl: proxyUrl ?? this.proxyUrl,
     );
   }
 }
