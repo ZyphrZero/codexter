@@ -1,5 +1,5 @@
+import 'downstream_tools.dart';
 import 'file_tools.dart';
-import 'gateway_tools.dart';
 import 'process_tools.dart';
 import 'registry.dart';
 import 'search_tools.dart';
@@ -17,7 +17,7 @@ class ToolBundle {
     SearchTools.register(registry, context);
     ProcessTools.register(registry, context);
     SkillTools.register(registry, context);
-    GatewayTools.register(registry, context);
+    DownstreamTools.register(registry, context);
     SummaryTools.register(registry, context);
     return registry;
   }

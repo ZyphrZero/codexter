@@ -41,11 +41,9 @@ class SummaryTools {
     name: 'summary',
     title: 'Round summary',
     description:
-        'Terminal tool for one user turn. One round means one user message through one final assistant response. '
-        'If you used any tool from this MCP server in that round, call `summary` once and only once, only after every other tool call and subtask is finished, immediately before the final response. '
-        'Do NOT call it for intermediate progress, after individual subtasks, after retries, or after individual Computer Use actions. Do NOT call it twice in the same user turn. '
-        'After calling `summary`, do not call any other tool from this MCP server in that user turn. If more tool work remains, do not call `summary` yet. '
-        'The summary must be one short user-facing paragraph only: no bullet points, numbered lists, detail lists, or line breaks.',
+        'Reports the final result for the current user turn and notifies the desktop app. '
+        'If any tool from this server was used, call summary once after all other work and immediately before the final response. '
+        'This is the last tool call for the turn. Use one short paragraph without lists or line breaks.',
     inputSchema: {
       'type': 'object',
       'properties': {

@@ -49,7 +49,7 @@ class AppSidebar extends StatelessWidget {
                   const _GroupLabel(label: '全局'),
                   _NavItem(
                     icon: BootstrapIcons.puzzle,
-                    label: 'Skills',
+                    label: '下游 Skills',
                     badge: _enabledSkillCount,
                     active: _isActive(AppPage.skills),
                     onPressed: () => appState.setCurrentPage(AppPage.skills),
@@ -62,16 +62,16 @@ class AppSidebar extends StatelessWidget {
                     onPressed: () => appState.setCurrentPage(AppPage.mcpManage),
                   ),
                   _NavItem(
-                    icon: BootstrapIcons.gear,
-                    label: '全局设置',
-                    active: false,
-                    onPressed: () => SettingsDialog.show(context, appState),
-                  ),
-                  _NavItem(
                     icon: BootstrapIcons.activity,
                     label: '环境检查',
                     active: _isActive(AppPage.doctor),
                     onPressed: () => appState.setCurrentPage(AppPage.doctor),
+                  ),
+                  _NavItem(
+                    icon: BootstrapIcons.gear,
+                    label: '全局设置',
+                    active: false,
+                    onPressed: () => SettingsDialog.show(context, appState),
                   ),
                 ],
               ),

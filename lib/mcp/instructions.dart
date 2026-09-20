@@ -19,9 +19,13 @@ class ServerInstructions {
     final sections = <String>[
       _environment(projectRoot, shell, toolCount),
       '',
-      'This MCP server exposes local coding tools for the current workspace.',
-      'For every tools/call request, include `purpose`: a concise user-visible summary (max 80 characters) of what the immediate call will obtain, verify, or change. `purpose` is used by the desktop app for activity UI and is never forwarded to downstream MCP tools.',
-      'Mandatory terminal-summary rule: one round means one user message through one final assistant response. If you use any tool from this MCP server during that round, call `summary` once and only once, after ALL other tool calls are finished and immediately before the final response. `summary` is the terminal marker for the round: never call it for intermediate milestones, individual subtasks, retries, progress updates, or individual Computer Use actions; never call it more than once in the same user turn. After calling `summary`, do not call any other tool from this MCP server in that user turn. If more tool work remains, do not call `summary` yet. The summary must be one short user-facing paragraph only: no bullets, numbered lists, detail lists, or line breaks. File changes are tracked automatically, so do not repeat them unless essential to the outcome.',
+      'This MCP server provides file, search and command tools for the current workspace and access to enabled MCP services.',
+      '',
+      ..._toolMap(),
+      '',
+      ..._playbook(),
+      '',
+      'One round is one user message through one final assistant response. If any tool from this server was used, call `summary` once and only once after all work, immediately before the final response; do not call it after each subtask. After calling `summary`, do not call any other tool from this server this turn. Use one short paragraph, no lists or line breaks.',
     ];
 
     final agents = _resolveAgents(projectRoot: projectRoot, mode: agentsMode, custom: customAgents);
@@ -32,12 +36,6 @@ class ServerInstructions {
         ..add(agents)
         ..add('</project_instructions>');
     }
-
-    sections
-      ..add('')
-      ..addAll(_toolMap())
-      ..add('')
-      ..addAll(_playbook());
 
     if (skills.isNotEmpty) {
       sections
@@ -54,7 +52,7 @@ class ServerInstructions {
     if (downstream.isNotEmpty) {
       sections
         ..add('')
-        ..add('Downstream MCP servers (discover with mcp_tools, invoke with mcp_call):');
+        ..add('Available MCP servers (discover with mcp_tools, invoke with mcp_call):');
       for (final client in downstream) {
         final description = client.description?.trim();
         sections.add(
@@ -103,32 +101,24 @@ class ServerInstructions {
     return null;
   }
 
+  // 保留工具名称索引便于发现；完整用途和参数只放在 tools/list 的工具定义中。
   static List<String> _toolMap() {
     return const [
-      'Tool map (pick by goal):',
-      '- read — read one file or several files with numbered lines before changing code.',
-      '- apply_patch — exact replacements, create/overwrite, or delete files atomically.',
-      '- ls — inspect one directory quickly.',
-      '- grep / glob — structured content and path search without shell syntax differences.',
-      '- code_explore — quickly outline source files and top-level symbols.',
-      '- exec_command — run shell commands; long-running commands return session_id.',
-      '- write_stdin — poll a running command or send stdin/Ctrl+C using session_id.',
-      '- skills_list / skill_read — discover dynamic local Skills and load SKILL.md on demand.',
-      '- mcp_tools / mcp_call — discover and invoke tools from enabled downstream MCP servers.',
-      '- summary — terminal tool for the current user turn; call once only after all other work is complete, then send the final response.',
+      'Built-in tools (full descriptions and parameters: tools/list):',
+      '- Files/search: read, read_image, ls, glob, grep, code_explore, apply_patch.',
+      '- Commands: exec_command, write_stdin.',
+      '- Skills: skills_list, skill_read.',
+      '- MCP: mcp_tools, mcp_call.',
+      '- Completion: summary.',
     ];
   }
 
   static List<String> _playbook() {
     return const [
-      'Working order:',
-      '1. Use ls / glob / code_explore / grep to locate relevant code efficiently.',
-      '2. Read the relevant files before changing them.',
-      '3. Use apply_patch for all source/text file changes; compose related edits there and avoid rewriting unrelated content.',
-      '4. Use exec_command for tests, builds, git, package managers, adb, and other installed CLI tools. Do not edit source/text files through shell redirection or Get-Content/Set-Content.',
-      '5. If exec_command returns session_id, continue with write_stdin; send \\u0003 to stop an interactive/long-running command when appropriate.',
-      '6. Use skill_read only when a listed Skill is relevant; use mcp_tools before mcp_call when downstream capabilities are unknown.',
-      '7. When all work for the current user message is complete, call summary exactly once as the final MCP tool call. Do not call summary earlier, do not call it after each subtask, and do not call any MCP tool after it in the same user turn.',
+      'Read relevant files before editing. Use apply_patch for file changes, exec_command for shell commands, and write_stdin to continue command sessions.',
+      'Built-in tools are listed by tools/list. mcp_tools lists tools from MCP servers enabled for this workspace.',
+      'Load relevant skill instructions with skill_read. Discover MCP tools with mcp_tools and invoke them with mcp_call.',
+      'Include a concise, user-visible purpose with each tool call.',
     ];
   }
 }

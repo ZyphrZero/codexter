@@ -515,19 +515,32 @@ class FileTools {
     name: 'apply_patch',
     title: 'Apply patch',
     description:
-        'Apply validated file changes transactionally. Multiple edits to the same file are composed in order; oldText replaces one exact snippet, omit oldText to create/overwrite, and set delete=true to delete. Writes are verified and commit failures are rolled back.',
+        'Edits files in the current workspace using an ordered list of JSON edits. Supports exact text replacement, file creation or overwrite, and deletion.',
     inputSchema: {
       'type': 'object',
       'properties': {
         'edits': {
           'type': 'array',
+          'description': 'Ordered file edits; use exact replacements for existing files.',
           'items': {
             'type': 'object',
             'properties': {
-              'path': {'type': 'string'},
-              'oldText': {'type': 'string'},
-              'newText': {'type': 'string'},
-              'delete': {'type': 'boolean', 'default': false},
+              'path': {'type': 'string', 'description': 'File path relative to project_root.'},
+              'oldText': {
+                'type': 'string',
+                'description':
+                    'Non-empty exact snippet to replace once. Omit only to create or overwrite the entire file.',
+              },
+              'newText': {
+                'type': 'string',
+                'description':
+                    'Replacement text, or full file content when oldText is omitted. Use an empty string to remove the matched snippet.',
+              },
+              'delete': {
+                'type': 'boolean',
+                'default': false,
+                'description': 'Set true only to delete the entire file.',
+              },
             },
             'required': ['path'],
           },

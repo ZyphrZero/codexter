@@ -1,7 +1,7 @@
 const computerUseMcpName = 'computer-use';
 const computerUseMcpDisplayName = 'Computer Use';
 const computerUseMcpDescription =
-    'Control Windows desktop apps through Codex Computer Use. Uses SendInput, UI Automation, and Windows.Graphics.Capture for window interaction, accessibility state, and screenshots. After all desktop work for the current user request is finished, call the end_turn tool once as the final Computer Use action.';
+    'Windows desktop interaction, accessibility inspection and screenshots. After completing the current desktop task, call end_turn once as the final Computer Use action.';
 
 const Map<String, dynamic> _windowSchema = {
   'type': 'object',
@@ -19,7 +19,7 @@ const List<Map<String, dynamic>> computerUseToolDefinitions = [
   {
     'name': 'list_windows',
     'description':
-        'List currently open Windows app windows that Computer Use can target. Use this to inspect open windows or recover a fresh window object after UI state changes.',
+        'Lists currently open Windows application windows and returns window objects for subsequent interaction.',
     'inputSchema': {'type': 'object', 'properties': <String, dynamic>{}},
     'annotations': {'readOnlyHint': true, 'destructiveHint': false, 'openWorldHint': false},
   },

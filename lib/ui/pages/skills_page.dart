@@ -29,7 +29,7 @@ class _SkillsPageState extends State<SkillsPage> {
     final enabledCount = skills.where((skill) => skill.enabled).length;
 
     return AppPageScaffold(
-      title: 'Skills',
+      title: '下游 Skills',
       subtitle: skills.isEmpty ? null : '共 ${skills.length} 个，$enabledCount 个启用',
       actions: [
         Button(

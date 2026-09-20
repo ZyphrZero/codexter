@@ -12,10 +12,63 @@ import 'package:codexter/utils/path_guard.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('下游 MCP 工具区分只读发现与可能写入的调用', () async {
+    final temp = await Directory.systemTemp.createTemp('codex_downstream_annotations_');
+    final processManager = ProcessSessionManager();
+    final capabilities = CapabilityRuntime();
+    final logStore = LogStore();
+    final now = DateTime.now();
+
+    try {
+      final registry = ToolBundle.build(
+        ToolContext(
+          workspace: Workspace(
+            uuid: '11111111-1111-4111-8111-111111111113',
+            name: 'downstream-annotations-test',
+            projectRoot: temp.path,
+            createdAt: now,
+            lastActiveAt: now,
+          ),
+          pathGuard: PathGuard(temp.path),
+          processManager: processManager,
+          capabilities: capabilities,
+          logStore: logStore,
+        ),
+      );
+      // 检查 tools/list 实际使用的序列化结果，而不是只检查内部常量。
+      final schemas = {for (final schema in registry.listSchemas()) schema.name: schema.toJson()};
+      expect(schemas['mcp_tools']!['annotations'], {
+        'readOnlyHint': true,
+        'destructiveHint': false,
+        'openWorldHint': true,
+      });
+      expect(schemas['mcp_call']!['annotations'], {
+        'readOnlyHint': false,
+        'destructiveHint': true,
+        'openWorldHint': true,
+      });
+      for (final name in ['apply_patch', 'exec_command', 'write_stdin']) {
+        expect((schemas[name]!['annotations'] as Map)['readOnlyHint'], isFalse, reason: name);
+      }
+    } finally {
+      await capabilities.shutdown();
+      capabilities.dispose();
+      await processManager.shutdown();
+      processManager.dispose();
+      logStore.dispose();
+      await temp.delete(recursive: true);
+    }
+  });
+
   test('reconnect fails explicitly when downstream MCP is not active', () async {
     final capabilities = CapabilityRuntime();
     try {
-      expect(capabilities.reconnect('missing'), throwsA(isA<StateError>()));
+      await expectLater(
+        capabilities.reconnect('missing'),
+        throwsA(
+          isA<StateError>().having((error) => error.message, 'message', 'MCP 服务 missing 未启用或不存在'),
+        ),
+      );
     } finally {
       await capabilities.shutdown();
       capabilities.dispose();
@@ -23,7 +76,7 @@ void main() {
   });
 
   test('mcp_call preserves rich content and keeps required text output concise', () async {
-    final temp = await Directory.systemTemp.createTemp('codex_gateway_tools_');
+    final temp = await Directory.systemTemp.createTemp('codex_downstream_tools_');
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final processManager = ProcessSessionManager();
     final capabilities = CapabilityRuntime();
@@ -75,7 +128,7 @@ void main() {
     final now = DateTime.now();
     final workspace = Workspace(
       uuid: '11111111-1111-4111-8111-111111111112',
-      name: 'gateway-test',
+      name: 'downstream-test',
       projectRoot: temp.path,
       createdAt: now,
       lastActiveAt: now,
@@ -91,6 +144,13 @@ void main() {
         logStore: logStore,
       );
       final registry = ToolBundle.build(context);
+
+      final listing = await registry.invoke('mcp_tools', {'purpose': '核对下游工具列表'});
+      expect(listing.isError, isFalse);
+      expect(listing.structuredContent!['text'], startsWith('=== ${entry.name} [connected]'));
+      final grouped = listing.structuredContent!['tools'] as Map;
+      expect(grouped.keys, [entry.name]);
+      expect((grouped[entry.name] as List).single['name'], 'capture');
 
       final result = await registry.invoke('mcp_call', {
         'purpose': '读取下游截图',

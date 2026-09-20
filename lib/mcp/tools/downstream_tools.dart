@@ -3,16 +3,16 @@ import '../../utils/fmt.dart';
 import 'registry.dart';
 import 'tool_context.dart';
 
-/// 下游 MCP 网关：mcp_tools / mcp_call
-class GatewayTools {
-  const GatewayTools._();
+/// 下游 MCP 工具：mcp_tools / mcp_call
+class DownstreamTools {
+  const DownstreamTools._();
 
   static void register(ToolRegistry registry, ToolContext context) {
     final capabilities = context.capabilities;
 
     DownstreamClient requireClient(String name) {
       final client = context.downstreamClientOf(name);
-      if (client == null) throw ToolArgError('Unknown downstream MCP: $name');
+      if (client == null) throw ToolArgError('Unknown MCP server: $name');
       return client;
     }
 
@@ -22,7 +22,7 @@ class GatewayTools {
 
       if (targets.isEmpty) {
         return ToolResult.text(
-          'No downstream MCP enabled. Manage them in the desktop app under MCP.',
+          'No MCP servers enabled for this workspace.',
           structured: {'servers': const [], 'tools': const <String, dynamic>{}},
         );
       }
@@ -61,7 +61,7 @@ class GatewayTools {
       }
       if (!client.isConnected) {
         return ToolResult.error(
-          'Downstream MCP $server is not connected${client.lastError == null ? '' : ': ${client.lastError}'}',
+          'MCP server $server is not connected${client.lastError == null ? '' : ': ${client.lastError}'}',
         );
       }
 
@@ -132,13 +132,16 @@ class GatewayTools {
     return rendered.isEmpty ? Fmt.json(result) : rendered;
   }
 
-  static const _serverProperty = {'type': 'string', 'description': 'Downstream MCP name'};
+  static const _serverProperty = {
+    'type': 'string',
+    'description': 'MCP server name, as listed by mcp_tools.',
+  };
 
   static const _toolsSchema = ToolSchema(
     name: 'mcp_tools',
-    title: 'Discover downstream MCP tools',
+    title: 'Discover MCP tools',
     description:
-        'List enabled downstream MCP servers and their available tools. Pass server to inspect one server in detail.',
+        'Lists MCP servers enabled for the current workspace and their available tools. Pass server to inspect one server.',
     inputSchema: {
       'type': 'object',
       'properties': {'server': _serverProperty},
@@ -161,26 +164,30 @@ class GatewayTools {
 
   static const _callSchema = ToolSchema(
     name: 'mcp_call',
-    title: 'Call downstream MCP tool',
+    title: 'Call MCP tool',
     description:
-        'Call one tool exposed by a downstream MCP server. Only arguments is forwarded to the downstream tool.',
+        'Calls a tool on an enabled MCP server and returns its result. Use mcp_tools to discover server names, tool names and input schemas.',
     inputSchema: {
       'type': 'object',
       'properties': {
         'server': _serverProperty,
-        'tool': {'type': 'string', 'description': 'Downstream tool name'},
-        'arguments': {'type': 'object', 'description': 'Arguments for the downstream tool only'},
+        'tool': {'type': 'string', 'description': 'Tool name provided by the selected MCP server.'},
+        'arguments': {
+          'type': 'object',
+          'description': 'Input object matching the selected tool\'s input schema.',
+        },
       },
       'required': ['server', 'tool'],
     },
     outputSchema: {
       'type': 'object',
       'properties': {
-        'text': {'type': 'string', 'description': 'Rendered downstream tool result'},
+        'text': {'type': 'string', 'description': 'Rendered MCP tool result'},
       },
       'required': ['text'],
     },
-    annotations: ToolAnnotations.openWorld,
+    // 下游工具调用可能执行写入、删除等操作，不能标为只读。
+    annotations: ToolAnnotations.destructive,
     meta: {
       'openai/toolInvocation/invoking': '正在调用 MCP 工具…',
       'openai/toolInvocation/invoked': 'MCP 工具调用完成',

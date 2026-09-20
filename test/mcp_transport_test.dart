@@ -75,6 +75,92 @@ void main() {
         expect(result.sessionId, isNull);
       }
 
+      // 用真实 HTTP 响应验证两种握手都提供同一份精简说明，工具详情仍由列表返回。
+      final discovery = await _postJson(client, uri, {
+        'jsonrpc': '2.0',
+        'id': 50,
+        'method': 'server/discover',
+        'params': <String, dynamic>{},
+      });
+      expect(discovery.status, HttpStatus.ok);
+      expect(discovery.body['error'], isNull);
+      final instructions = (discovery.body['result'] as Map)['instructions'] as String;
+      for (final result in initializeResults) {
+        expect((result.body['result'] as Map)['instructions'], instructions);
+      }
+      expect(instructions, contains(workspace.projectRoot));
+      expect(instructions, isNot(contains('Computer Use')));
+      expect(instructions, isNot(contains('computer-use')));
+      expect(instructions.toLowerCase(), isNot(contains('downstream')));
+      expect(instructions, contains('- MCP: mcp_tools, mcp_call.'));
+      expect(instructions.length, lessThan(2000));
+
+      final toolList = await _postJson(client, uri, {
+        'jsonrpc': '2.0',
+        'id': 51,
+        'method': 'tools/list',
+        'params': <String, dynamic>{},
+      });
+      expect(toolList.status, HttpStatus.ok);
+      expect(toolList.body['error'], isNull);
+      final schemas = {
+        for (final tool in (toolList.body['result'] as Map)['tools'] as List)
+          (tool as Map)['name'] as String: tool,
+      };
+      expect(schemas, hasLength(14));
+      for (final name in schemas.keys) {
+        expect(instructions, contains(name), reason: name);
+      }
+      expect(schemas['exec_command']!['description'], contains('session_id'));
+      for (final schema in schemas.values) {
+        expect(schema['description'], isNot(contains('Computer Use')));
+        final modelDescription = jsonEncode({
+          'title': schema['title'],
+          'description': schema['description'],
+          'inputSchema': schema['inputSchema'],
+          'outputSchema': schema['outputSchema'],
+        });
+        expect(RegExp(r'downstream|下游', caseSensitive: false).hasMatch(modelDescription), isFalse);
+      }
+      expect(schemas['apply_patch']!['inputSchema'], isA<Map>());
+      expect((schemas['mcp_call']!['annotations'] as Map)['readOnlyHint'], isFalse);
+      expect((schemas['mcp_tools']!['annotations'] as Map)['readOnlyHint'], isTrue);
+
+      final emptyListing = await _postJson(client, uri, {
+        'jsonrpc': '2.0',
+        'id': 52,
+        'method': 'tools/call',
+        'params': {
+          'name': 'mcp_tools',
+          'arguments': {'purpose': '读取 MCP 服务列表'},
+        },
+      });
+      expect(emptyListing.status, HttpStatus.ok);
+      final listing = (emptyListing.body['result'] as Map)['structuredContent'] as Map;
+      expect(listing['text'], 'No MCP servers enabled for this workspace.');
+      expect(listing['servers'], isEmpty);
+      expect(listing['tools'], isEmpty);
+
+      for (final name in ['mcp_tools', 'mcp_call']) {
+        final unknownServer = await _postJson(client, uri, {
+          'jsonrpc': '2.0',
+          'id': 'unknown-$name',
+          'method': 'tools/call',
+          'params': {
+            'name': name,
+            'arguments': {
+              'purpose': '检查无效 MCP 服务名称',
+              'server': 'missing',
+              if (name == 'mcp_call') 'tool': 'capture',
+            },
+          },
+        });
+        expect(unknownServer.status, HttpStatus.ok);
+        final result = unknownServer.body['result'] as Map;
+        expect(result['isError'], isTrue);
+        expect((result['structuredContent'] as Map)['text'], '$name: Unknown MCP server: missing');
+      }
+
       const uiResourceUri = McpUiCatalog.summaryResourceUri;
       final readResults = await Future.wait(
         List.generate(24, (index) {

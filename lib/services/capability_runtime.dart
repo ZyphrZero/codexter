@@ -57,7 +57,7 @@ class CapabilityRuntime extends ChangeNotifier {
   Future<void> reconnect(String name) async {
     final client = _clients[name];
     if (client == null) {
-      throw StateError('下游 MCP $name 未启用或不存在');
+      throw StateError('MCP 服务 $name 未启用或不存在');
     }
     await client.close();
     final fresh = DownstreamClient(client.entry);
@@ -65,7 +65,7 @@ class CapabilityRuntime extends ChangeNotifier {
     notifyListeners();
     await _connectOne(fresh);
     if (!fresh.isConnected) {
-      throw Exception(fresh.lastError ?? '下游 MCP $name 重新连接失败');
+      throw Exception(fresh.lastError ?? 'MCP 服务 $name 重新连接失败');
     }
   }
 

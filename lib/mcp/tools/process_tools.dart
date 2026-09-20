@@ -94,7 +94,7 @@ class ProcessTools {
     name: 'exec_command',
     title: 'Execute command',
     description:
-        'Run shell commands for tests, builds, git, package managers, adb, and other CLI operations. Do not use shell redirection, Get-Content/Set-Content, or similar commands to edit source/text files; use apply_patch instead. If still running after yield_time_ms, returns a session_id for write_stdin.',
+        'Runs a shell command in the current workspace, returning output and a session_id if the command is still running.',
     inputSchema: {
       'type': 'object',
       'properties': {
@@ -135,14 +135,18 @@ class ProcessTools {
     name: 'write_stdin',
     title: 'Continue command',
     description:
-        'Poll a running exec_command session and optionally send stdin. Use \\u0003 in chars to send Ctrl+C.',
+        'Writes characters to a session started by exec_command and returns recent output.',
     inputSchema: {
       'type': 'object',
       'properties': {
-        'session_id': {'type': 'integer'},
+        'session_id': {
+          'type': 'integer',
+          'description': 'Managed session id returned by exec_command on this server.',
+        },
         'chars': {
           'type': 'string',
-          'description': 'Optional stdin characters; \\u0003 sends Ctrl+C',
+          'description':
+              'Characters to write to stdin. Omit or use an empty string to poll without writing; \\u0003 sends Ctrl+C',
         },
         'yield_time_ms': {
           'type': 'integer',
