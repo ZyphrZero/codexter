@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../models/process_info.dart';
 import '../utils/path_guard.dart';
 import '../utils/rolling_buffer.dart';
+import 'network_proxy.dart';
 
 const defaultMaxOutputChars = 40000;
 const maxToolBufferChars = 1000000;
@@ -110,7 +111,7 @@ class ProcessSessionManager extends ChangeNotifier {
         shell,
         shellArgs,
         workingDirectory: cwd,
-        environment: {...Platform.environment, 'NO_COLOR': '1'},
+        environment: NetworkProxy.processEnvironment(overrides: {'NO_COLOR': '1'}),
       );
 
       session.child!.stdout.listen((data) => _append(session, TextDecode.bytes(data)));

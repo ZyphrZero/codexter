@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../desktop_adapter.dart';
+import '../../services/network_proxy.dart';
 
 /// macOS 下载、解压和校验独立实现，不改 Windows 的安装路径。
 class MacosCloudflared {
@@ -28,7 +29,7 @@ class MacosCloudflared {
     await target.parent.create(recursive: true);
     // 与目标处于同一文件系统；验证通过前不动旧文件。
     final staging = await target.parent.createTemp('.cloudflared-');
-    final client = HttpClient()..connectionTimeout = _networkTimeout;
+    final client = NetworkProxy.createHttpClient()..connectionTimeout = _networkTimeout;
     try {
       final request = await client.getUrl(source).timeout(_networkTimeout);
       final response = await request.close().timeout(_networkTimeout);

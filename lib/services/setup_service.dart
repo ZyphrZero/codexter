@@ -8,6 +8,7 @@ import '../utils/app_paths.dart';
 import '../utils/path_guard.dart';
 import 'cloudflared_login_output.dart';
 import 'cloudflared_tunnel_setup.dart';
+import 'network_proxy.dart';
 import 'tunnel_service.dart';
 
 const cloudflaredVersion = '2026.7.2';
@@ -52,30 +53,36 @@ class SetupService {
     }
   }
 
-  Future<String?> findCloudflaredBin() async {
-    final managed = await cloudflaredPath;
-    if (await File(managed).exists()) return managed;
+  /// 统一返回绝对路径，不能把 PATH 中的命令名作为文件路径保存。
+  Future<String?> findCloudflaredBin({String? configuredPath}) async {
+    final executableName = Platform.isWindows ? 'cloudflared.exe' : 'cloudflared';
+    final pathDirectories = (Platform.environment['PATH'] ?? '').split(
+      Platform.isWindows ? ';' : ':',
+    );
+    final candidates = <String>[
+      if (configuredPath != null && configuredPath.isNotEmpty) configuredPath,
+      await cloudflaredPath,
+      if (Platform.isWindows) ...[
+        p.join(_homeDir(), executableName),
+        r'C:\Program Files (x86)\cloudflared\cloudflared.exe',
+        r'C:\Program Files\cloudflared\cloudflared.exe',
+      ] else ...[
+        '/usr/local/bin/cloudflared',
+        '/usr/bin/cloudflared',
+        '/opt/homebrew/bin/cloudflared',
+      ],
+      for (final directory in pathDirectories)
+        if (directory.isNotEmpty)
+          p.join(
+            Platform.isWindows ? directory.replaceAll(RegExp(r'^"|"$'), '') : directory,
+            executableName,
+          ),
+    ];
 
-    final candidates = Platform.isWindows
-        ? <String>[
-            p.join(_homeDir(), 'cloudflared.exe'),
-            r'C:\Program Files (x86)\cloudflared\cloudflared.exe',
-            r'C:\Program Files\cloudflared\cloudflared.exe',
-          ]
-        : <String>[
-            '/usr/local/bin/cloudflared',
-            '/usr/bin/cloudflared',
-            '/opt/homebrew/bin/cloudflared',
-          ];
-
-    for (final candidate in candidates) {
-      if (await File(candidate).exists()) return candidate;
+    for (final candidate in candidates.toSet()) {
+      final file = File(candidate);
+      if (await file.exists()) return p.normalize(file.absolute.path);
     }
-
-    try {
-      final result = await Process.run('cloudflared', ['--version']);
-      if (result.exitCode == 0) return 'cloudflared';
-    } catch (_) {}
     return null;
   }
 
@@ -97,7 +104,7 @@ class SetupService {
     )) {
       return;
     }
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
+    final client = NetworkProxy.createHttpClient()..connectionTimeout = const Duration(seconds: 30);
 
     try {
       final request = await client.getUrl(Uri.parse(_downloadUrl));
@@ -161,7 +168,7 @@ class SetupService {
     if (await loginHome.exists()) await loginHome.delete(recursive: true);
     await loginHome.create(recursive: true);
     final generatedCert = File(p.join(loginHome.path, '.cloudflared', 'cert.pem'));
-    final environment = Map<String, String>.of(Platform.environment)
+    final environment = NetworkProxy.processEnvironment()
       ..['HOME'] = loginHome.path
       ..['USERPROFILE'] = loginHome.path;
 
@@ -303,7 +310,7 @@ class SetupService {
 
   /// 使用 Cloudflare 1.1.1.1 DoH 绕过本机/路由器的 NXDOMAIN 负缓存。
   Future<bool> isPublicDnsResolved(String domain) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final client = NetworkProxy.createHttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
       final uri = Uri.https('cloudflare-dns.com', '/dns-query', {'name': domain, 'type': 'A'});
       final request = await client.getUrl(uri);

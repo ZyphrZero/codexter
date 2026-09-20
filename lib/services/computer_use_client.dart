@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'computer_use_tools.dart';
+import 'network_proxy.dart';
 
 class ComputerUseRuntimePaths {
   final String helperPath;
@@ -221,11 +222,9 @@ class ComputerUseClient {
       paths.helperPath,
       ['--parent-pid', '$pid'],
       workingDirectory: p.dirname(paths.helperPath),
-      environment: {
-        ...Platform.environment,
-        'CODEX_CLI_PATH': paths.codexCliPath,
-        'CODEX_HOME': paths.codexHome,
-      },
+      environment: NetworkProxy.processEnvironment(
+        overrides: {'CODEX_CLI_PATH': paths.codexCliPath, 'CODEX_HOME': paths.codexHome},
+      ),
     );
     _process = child;
     _stdoutSub = child.stdout

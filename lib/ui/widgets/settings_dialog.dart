@@ -11,11 +11,18 @@ import 'app_spacing.dart';
 import 'app_toast.dart';
 import 'cloudflare_login_notice.dart';
 import 'json_view.dart';
+import 'proxy_settings_form.dart';
+
+enum SettingsSection { general, notifications, network, proxy }
 
 class SettingsDialog {
   const SettingsDialog._();
 
-  static Future<void> show(BuildContext context, AppState appState) {
+  static Future<void> show(
+    BuildContext context,
+    AppState appState, {
+    SettingsSection initialSection = SettingsSection.general,
+  }) {
     return showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -64,7 +71,10 @@ class SettingsDialog {
                         child: SizedBox(
                           width: double.infinity,
                           height: double.infinity,
-                          child: _SettingsDialogBody(appState: appState),
+                          child: _SettingsDialogBody(
+                            appState: appState,
+                            initialSection: initialSection,
+                          ),
                         ),
                       ),
                     ),
@@ -82,8 +92,9 @@ class SettingsDialog {
 
 class _SettingsDialogBody extends StatefulWidget {
   final AppState appState;
+  final SettingsSection initialSection;
 
-  const _SettingsDialogBody({required this.appState});
+  const _SettingsDialogBody({required this.appState, required this.initialSection});
 
   @override
   State<_SettingsDialogBody> createState() => _SettingsDialogBodyState();
@@ -95,8 +106,10 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
   late final TextEditingController _hostController;
   late final TextEditingController _portController;
   late final TextEditingController _tunnelNameController;
+  late final TextEditingController _proxyUrlController;
   late bool _useCloudflared;
-  int _section = 0;
+  late bool _proxyEnabled;
+  late SettingsSection _section;
   bool _saving = false;
   String? _loginUrl;
 
@@ -105,12 +118,15 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
   @override
   void initState() {
     super.initState();
+    _section = widget.initialSection;
     final config = appState.config;
     _domainController = TextEditingController(text: config.domain);
     _hostController = TextEditingController(text: config.host);
     _portController = TextEditingController(text: '${config.port}');
     _tunnelNameController = TextEditingController(text: config.tunnelName);
+    _proxyUrlController = TextEditingController(text: config.proxyUrl);
     _useCloudflared = config.useCloudflared;
+    _proxyEnabled = config.proxyEnabled;
     appState.addListener(_onAppStateChanged);
   }
 
@@ -125,6 +141,7 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
     _hostController.dispose();
     _portController.dispose();
     _tunnelNameController.dispose();
+    _proxyUrlController.dispose();
     super.dispose();
   }
 
@@ -193,20 +210,26 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
           _SettingsNavItem(
             icon: BootstrapIcons.sliders,
             label: '常规',
-            selected: _section == 0,
-            onTap: () => setState(() => _section = 0),
+            selected: _section == SettingsSection.general,
+            onTap: () => setState(() => _section = SettingsSection.general),
           ),
           _SettingsNavItem(
             icon: BootstrapIcons.bell,
             label: '通知',
-            selected: _section == 1,
-            onTap: () => setState(() => _section = 1),
+            selected: _section == SettingsSection.notifications,
+            onTap: () => setState(() => _section = SettingsSection.notifications),
           ),
           _SettingsNavItem(
             icon: BootstrapIcons.cloud,
             label: '公网服务',
-            selected: _section == 2,
-            onTap: () => setState(() => _section = 2),
+            selected: _section == SettingsSection.network,
+            onTap: () => setState(() => _section = SettingsSection.network),
+          ),
+          _SettingsNavItem(
+            icon: BootstrapIcons.globe,
+            label: '全局代理',
+            selected: _section == SettingsSection.proxy,
+            onTap: () => setState(() => _section = SettingsSection.proxy),
           ),
         ],
       ),
@@ -215,26 +238,33 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
 
   Widget _buildSection(BuildContext context) {
     final title = switch (_section) {
-      0 => '常规',
-      1 => '通知',
-      _ => '公网服务',
+      SettingsSection.general => '常规',
+      SettingsSection.notifications => '通知',
+      SettingsSection.proxy => '全局代理',
+      SettingsSection.network => '公网服务',
     };
     final description = switch (_section) {
-      0 => '应用运行方式和界面外观。',
-      1 => '控制 ChatGPT 完成一轮处理后的提醒方式。',
-      _ => '配置本地监听与 Cloudflare Tunnel。',
+      SettingsSection.general => '应用运行方式和界面外观。',
+      SettingsSection.notifications => '控制 ChatGPT 完成一轮处理后的提醒方式。',
+      SettingsSection.proxy => '配置 Codexter 的出站网络代理。',
+      SettingsSection.network => '配置本地监听与 Cloudflare Tunnel。',
     };
 
     final action = switch (_section) {
-      1 => Button(
+      SettingsSection.notifications => Button(
         style: ButtonStyle.outline(size: ButtonSize.small),
         onPressed: appState.config.notificationsEnabled ? _testNotification : null,
         child: const AppButtonLabel(icon: BootstrapIcons.bell, label: '测试通知'),
       ),
-      2 => Button(
+      SettingsSection.network => Button(
         style: ButtonStyle.primary(size: ButtonSize.small),
         onPressed: _saving ? null : _saveAndRestart,
         child: AppButtonLabel(icon: BootstrapIcons.check2, label: _saving ? '应用中…' : '保存并重启'),
+      ),
+      SettingsSection.proxy => Button(
+        style: ButtonStyle.primary(size: ButtonSize.small),
+        onPressed: _saving ? null : _saveProxy,
+        child: AppButtonLabel(icon: BootstrapIcons.check2, label: _saving ? '保存中…' : '保存代理'),
       ),
       _ => null,
     };
@@ -252,9 +282,10 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 700),
                   child: switch (_section) {
-                    0 => _buildGeneral(context),
-                    1 => _buildNotifications(context),
-                    _ => _buildNetwork(context),
+                    SettingsSection.general => _buildGeneral(context),
+                    SettingsSection.notifications => _buildNotifications(context),
+                    SettingsSection.proxy => _buildProxy(context),
+                    SettingsSection.network => _buildNetwork(context),
                   },
                 ),
               ),
@@ -340,6 +371,33 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
         ),
       ],
     );
+  }
+
+  Widget _buildProxy(BuildContext context) {
+    return ProxySettingsForm(
+      enabled: _proxyEnabled,
+      controller: _proxyUrlController,
+      busy: _saving,
+      onEnabledChanged: (value) => setState(() => _proxyEnabled = value),
+    );
+  }
+
+  Future<void> _saveProxy() async {
+    setState(() => _saving = true);
+    try {
+      await appState.saveGlobalConfig(
+        appState.config.copyWith(proxyEnabled: _proxyEnabled, proxyUrl: _proxyUrlController.text),
+      );
+      if (!mounted) return;
+      _proxyUrlController.text = appState.config.proxyUrl;
+      AppToast.success(context, '代理配置已保存');
+    } on FormatException catch (error) {
+      if (mounted) AppToast.error(context, error.message);
+    } catch (error) {
+      if (mounted) AppToast.error(context, '保存代理失败：$error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   Widget _buildNetwork(BuildContext context) {
@@ -516,7 +574,9 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
 
       final tunnelId = appState.config.tunnelId;
       if (_useCloudflared && domain.isNotEmpty && tunnelId != null && tunnelId.isNotEmpty) {
-        final bin = await _setupService.findCloudflaredBin();
+        final bin = await _setupService.findCloudflaredBin(
+          configuredPath: appState.config.cloudflaredBin,
+        );
         if (bin == null) throw Exception('未找到 cloudflared');
         await _setupService.ensureDnsRoute(bin, tunnelId, domain, onLoginUrl: _updateLoginUrl);
       }
@@ -538,7 +598,9 @@ class _SettingsDialogBodyState extends State<_SettingsDialogBody> {
   Future<void> _createTunnel() async {
     setState(() => _saving = true);
     try {
-      final bin = await _setupService.findCloudflaredBin();
+      final bin = await _setupService.findCloudflaredBin(
+        configuredPath: appState.config.cloudflaredBin,
+      );
       if (bin == null) throw Exception('未找到 cloudflared');
       final domain = _setupService.normalizeDomain(_domainController.text);
       if (domain.isEmpty) throw Exception('请先填写公网域名');

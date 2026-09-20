@@ -125,7 +125,7 @@ class CloudflaredStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('第 1 步：安装 cloudflared', style: AppTones.title(theme, size: 14)),
+        Text('第 2 步：安装 cloudflared', style: AppTones.title(theme, size: 14)),
         const Gap(AppSpacing.md),
         if (binPath != null)
           AppNotice(
@@ -185,7 +185,7 @@ class DomainStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('第 2 步：公网域名', style: AppTones.title(theme, size: 14)),
+        Text('第 3 步：公网域名', style: AppTones.title(theme, size: 14)),
         const Gap(AppSpacing.md),
         AppField(
           label: '域名',
@@ -211,7 +211,7 @@ class TunnelStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('第 3 步：创建 Tunnel', style: AppTones.title(theme, size: 14)),
+        Text('第 4 步：创建 Tunnel', style: AppTones.title(theme, size: 14)),
         const Gap(AppSpacing.md),
         AppField(label: 'Tunnel 名称', controller: controller, placeholder: 'codex-mcp'),
         const Gap(AppSpacing.lg),

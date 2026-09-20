@@ -8,9 +8,10 @@ import '../widgets/app_components.dart';
 import '../widgets/app_spacing.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/cloudflare_login_notice.dart';
+import '../widgets/proxy_settings_form.dart';
 import '../widgets/setup_wizard_steps.dart';
 
-/// 首次启动向导：cloudflared → 域名 → Tunnel → 完成
+/// 首次启动向导：出站代理 → cloudflared → 域名 → Tunnel → 完成
 class FirstRunPage extends StatefulWidget {
   final AppState appState;
 
@@ -21,11 +22,13 @@ class FirstRunPage extends StatefulWidget {
 }
 
 class _FirstRunPageState extends State<FirstRunPage> {
-  static const _stepLabels = ['Cloudflared', '域名', 'Tunnel', '完成'];
+  static const _stepLabels = ['代理', 'Cloudflared', '域名', 'Tunnel', '完成'];
 
   final _setupService = SetupService();
   final _domainController = TextEditingController();
   final _tunnelNameController = TextEditingController(text: 'codex-mcp');
+  late final TextEditingController _proxyUrlController;
+  late bool _proxyEnabled;
 
   int _step = 0;
   bool _busy = false;
@@ -41,6 +44,8 @@ class _FirstRunPageState extends State<FirstRunPage> {
   @override
   void initState() {
     super.initState();
+    _proxyEnabled = widget.appState.config.proxyEnabled;
+    _proxyUrlController = TextEditingController(text: widget.appState.config.proxyUrl);
     _probeCloudflared();
   }
 
@@ -48,6 +53,7 @@ class _FirstRunPageState extends State<FirstRunPage> {
   void dispose() {
     _domainController.dispose();
     _tunnelNameController.dispose();
+    _proxyUrlController.dispose();
     super.dispose();
   }
 
@@ -81,7 +87,7 @@ class _FirstRunPageState extends State<FirstRunPage> {
                               AppNotice(tone: AppNoticeTone.danger, message: _error!),
                               const Gap(AppSpacing.lg),
                             ],
-                            if (_status != null && _step != 0) ...[
+                            if (_status != null && _step != 1) ...[
                               AppNotice(tone: AppNoticeTone.info, message: _status!),
                               const Gap(AppSpacing.lg),
                             ],
@@ -148,7 +154,13 @@ class _FirstRunPageState extends State<FirstRunPage> {
           if (_step > 0)
             Button(
               style: ButtonStyle.outline(size: ButtonSize.normal),
-              onPressed: _busy ? null : () => setState(() => _step--),
+              onPressed: _busy
+                  ? null
+                  : () => setState(() {
+                      _step--;
+                      _error = null;
+                      _status = null;
+                    }),
               child: const Text('上一步'),
             ),
           const Spacer(),
@@ -164,7 +176,25 @@ class _FirstRunPageState extends State<FirstRunPage> {
 
   Widget _buildStepBody() {
     return switch (_step) {
-      0 => CloudflaredStep(
+      0 => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('第 1 步：出站全局代理', style: AppTones.title(Theme.of(context), size: 14)),
+          const Gap(AppSpacing.sm),
+          Text(
+            '需要代理访问外网时，请先配置。点击「下一步」保存后，后续下载即会使用该配置；无需自定义代理可直接继续。',
+            style: AppTones.muted(Theme.of(context)),
+          ),
+          const Gap(AppSpacing.lg),
+          ProxySettingsForm(
+            enabled: _proxyEnabled,
+            controller: _proxyUrlController,
+            busy: _busy,
+            onEnabledChanged: (value) => setState(() => _proxyEnabled = value),
+          ),
+        ],
+      ),
+      1 => CloudflaredStep(
         probed: _probed,
         binPath: _cloudflaredBin,
         version: _cloudflaredVersion,
@@ -177,11 +207,11 @@ class _FirstRunPageState extends State<FirstRunPage> {
         onRecheck: _probeCloudflared,
         onOpenRelease: () => _openUrl(SetupService.githubReleasesUrl),
       ),
-      1 => DomainStep(
+      2 => DomainStep(
         controller: _domainController,
         onOpenDashboard: () => _openUrl('https://dash.cloudflare.com/'),
       ),
-      2 => TunnelStep(controller: _tunnelNameController),
+      3 => TunnelStep(controller: _tunnelNameController),
       _ => DoneStep(
         domain: _setupService.normalizeDomain(_domainController.text),
         onOpenDocs: () => _openUrl('https://learn.chatgpt.com/docs/mcp-server'),
@@ -201,7 +231,9 @@ class _FirstRunPageState extends State<FirstRunPage> {
 
   Future<void> _probeCloudflared() async {
     final target = await AppPaths.cloudflaredPath;
-    final bin = await _setupService.findCloudflaredBin();
+    final bin = await _setupService.findCloudflaredBin(
+      configuredPath: widget.appState.config.cloudflaredBin,
+    );
     final version = bin == null ? null : await _setupService.probeVersion(bin);
     if (!mounted) return;
     setState(() {
@@ -241,20 +273,42 @@ class _FirstRunPageState extends State<FirstRunPage> {
   }
 
   Future<void> _next() async {
+    if (_busy) return;
     setState(() {
       _error = null;
       _status = null;
     });
 
-    if (_step == 0 && _cloudflaredBin == null) {
+    if (_step == 0) {
+      setState(() => _busy = true);
+      try {
+        await widget.appState.saveGlobalConfig(
+          widget.appState.config.copyWith(
+            proxyEnabled: _proxyEnabled,
+            proxyUrl: _proxyUrlController.text,
+          ),
+        );
+        if (!mounted) return;
+        _proxyUrlController.text = widget.appState.config.proxyUrl;
+      } on FormatException catch (error) {
+        if (mounted) setState(() => _error = error.message);
+        return;
+      } catch (error) {
+        if (mounted) setState(() => _error = '保存代理失败：$error');
+        return;
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+    }
+    if (_step == 1 && _cloudflaredBin == null) {
       setState(() => _error = '请先安装 cloudflared');
       return;
     }
-    if (_step == 1 && _setupService.normalizeDomain(_domainController.text).isEmpty) {
+    if (_step == 2 && _setupService.normalizeDomain(_domainController.text).isEmpty) {
       setState(() => _error = '请输入有效域名');
       return;
     }
-    if (_step == 2) {
+    if (_step == 3) {
       final succeeded = await _provisionTunnel();
       if (!succeeded) return;
     }

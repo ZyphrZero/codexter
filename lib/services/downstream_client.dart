@@ -5,6 +5,7 @@ import '../app_info.dart';
 import '../models/downstream_mcp_entry.dart';
 import '../utils/path_guard.dart';
 import 'computer_use_client.dart';
+import 'network_proxy.dart';
 import 'computer_use_tools.dart';
 
 enum DownstreamState { idle, connecting, connected, failed, closed }
@@ -97,7 +98,8 @@ class DownstreamClient {
       if (entry.isStdio) {
         await _startStdio();
       } else if (entry.isUrl) {
-        _httpClient = HttpClient()..connectionTimeout = Duration(milliseconds: startupTimeoutMs);
+        _httpClient = NetworkProxy.createHttpClient()
+          ..connectionTimeout = Duration(milliseconds: startupTimeoutMs);
       } else {
         throw Exception('未配置 command 或 url');
       }
@@ -202,7 +204,7 @@ class DownstreamClient {
       command,
       entry.args,
       workingDirectory: entry.cwd,
-      environment: {...Platform.environment, ...entry.env},
+      environment: NetworkProxy.processEnvironment(overrides: entry.env),
     );
 
     _stdoutSub = _child!.stdout
