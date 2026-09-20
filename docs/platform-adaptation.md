@@ -63,8 +63,6 @@ flutter pub get --enforce-lockfile
 flutter run -d macos
 ```
 
-`.github/workflows/desktop-compatibility.yml` 是独立的只读检查，覆盖 PR 和 main 更新。分别在 Windows/macOS 执行锁文件校验、格式、分析、测试与 Release 编译；Mac 另编译 Debug。没有发布凭据，不创建 Release，不改更新清单。未提交/推送的本地修改不会触发远端检查。
-
 Windows 本地可以执行 `flutter test test/platform`，验证平台分流、默认能力、退出回调并发/超时，以及通过回环 HTTP 和真实 tar 验证安装事务。Mac 可执行文件校验测试使用本地脚本夹具；这些测试不等于完整 Mac 应用验收。
 
 合并前应由 Mac CI 验证编译，并在真实 Mac 上验收：首次向导和隧道启动；Finder 启动后命令及下游 MCP 找到 Homebrew；目录选择；托盘和 Dock 恢复；菜单/托盘退出；运行任务时退出后的进程及端口状态。Apple Silicon 与 Intel 的包名分流测试通过不代表两个架构都已完成实机测试。
