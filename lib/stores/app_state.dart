@@ -120,7 +120,7 @@ class AppState extends ChangeNotifier {
     capabilities.syncSkills(_skills);
     capabilities.addListener(notifyListeners);
     logStore.addListener(notifyListeners);
-    await notificationService.initialize();
+    await notificationService.initialize(onNotificationTap: _handleNotificationTap);
     if (_config.notificationsEnabled) {
       unawaited(notificationService.requestPermissions(sound: _config.notificationSound));
     }
@@ -183,6 +183,13 @@ class AppState extends ChangeNotifier {
 
   void clearError() {
     _lastError = null;
+    notifyListeners();
+  }
+
+  void _handleNotificationTap(String? workspaceUuid) {
+    if (workspaceUuid == null || !_workspaces.any((item) => item.uuid == workspaceUuid)) return;
+    _currentPage = AppPage.home;
+    _selectedWorkspaceUuid = workspaceUuid;
     notifyListeners();
   }
 
@@ -332,7 +339,7 @@ class AppState extends ChangeNotifier {
 
   List<McpLogEntry> recentLogs(String uuid, int count) => logStore.recentOf(uuid, count);
 
-  void clearWorkspaceLogs(String uuid) => logStore.clearEntries(uuid);
+  void clearWorkspaceLogs(String uuid) => logStore.clear(uuid);
 
   String? latestToolPurpose(String uuid) => logStore.latestToolPurposeOf(uuid);
 

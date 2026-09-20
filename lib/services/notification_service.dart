@@ -10,8 +10,10 @@ import '../models/summary_notice.dart';
 class NotificationService {
   final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
   bool _initialized = false;
+  ValueChanged<String?>? _onNotificationTap;
 
-  Future<void> initialize() async {
+  Future<void> initialize({ValueChanged<String?>? onNotificationTap}) async {
+    if (onNotificationTap != null) _onNotificationTap = onNotificationTap;
     if (_initialized || (!Platform.isWindows && !Platform.isMacOS)) return;
 
     final executableDir = File(Platform.resolvedExecutable).parent.path;
@@ -38,7 +40,10 @@ class NotificationService {
     );
     await _plugin.initialize(
       settings: settings,
-      onDidReceiveNotificationResponse: (_) => _showMainWindow(),
+      onDidReceiveNotificationResponse: (response) {
+        _onNotificationTap?.call(response.payload);
+        _showMainWindow();
+      },
     );
     _initialized = true;
   }

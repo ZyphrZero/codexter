@@ -50,17 +50,21 @@ void main() {
     expect(store.latestToolPurposeOf('workspace-1'), isNull);
   });
 
-  test('clearEntries removes logs but keeps workspace stats', () {
+  test('clear removes logs and resets workspace stats', () {
     final store = LogStore();
     addTearDown(store.dispose);
 
-    store.add(_entry(id: '1', purpose: '读取配置'));
+    final entry = _entry(id: '1', purpose: '读取配置');
+    store.add(entry);
+    store.completeEntry(entry, response: const {}, durationMs: 1, success: false);
     expect(store.statsOf('workspace-1').toolCalls, 1);
+    expect(store.statsOf('workspace-1').errors, 1);
 
-    store.clearEntries('workspace-1');
+    store.clear('workspace-1');
 
     expect(store.entriesOf('workspace-1'), isEmpty);
     expect(store.latestToolPurposeOf('workspace-1'), isNull);
-    expect(store.statsOf('workspace-1').toolCalls, 1);
+    expect(store.statsOf('workspace-1').toolCalls, 0);
+    expect(store.statsOf('workspace-1').errors, 0);
   });
 }

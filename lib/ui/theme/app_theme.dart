@@ -134,6 +134,13 @@ class AppTones {
         : const Color(0xFFF3F4F6);
   }
 
+  /// 侧栏当前项需要比浅色侧栏底色明显一档，但仍保持中性灰语义。
+  static Color navigationSelected(ThemeData theme) {
+    return theme.colorScheme.brightness == Brightness.dark
+        ? const Color(0xFF2B2E35)
+        : const Color(0xFFECEDEF);
+  }
+
   static Color borderSubtle(ThemeData theme) {
     if (theme.colorScheme.brightness == Brightness.dark) {
       return theme.colorScheme.border.withValues(alpha: 0.95);

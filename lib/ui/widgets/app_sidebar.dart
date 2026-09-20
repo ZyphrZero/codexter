@@ -316,13 +316,11 @@ class _NavItemState extends State<_NavItem> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final background = widget.active
+        ? AppTones.navigationSelected(theme)
+        : _hovered
         ? AppTones.surfaceHover(theme)
-        : _hovered
-        ? AppTones.surfaceRaised(theme)
         : Colors.transparent;
-    final foreground = widget.active
-        ? AppTones.interaction(theme)
-        : _hovered
+    final foreground = _hovered || widget.active
         ? theme.colorScheme.foreground
         : theme.colorScheme.mutedForeground;
 
@@ -338,50 +336,75 @@ class _NavItemState extends State<_NavItem> {
         child: Container(
           height: widget.caption == null ? 38 : null,
           margin: const EdgeInsets.only(bottom: AppSpacing.xs),
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
           decoration: BoxDecoration(
             color: background,
             borderRadius: BorderRadius.circular(theme.radiusMd),
           ),
-          child: Row(
+          child: Stack(
             children: [
-              SizedBox(
-                width: 16,
-                child: Center(
-                  child: widget.leading ?? Icon(widget.icon, size: 14, color: foreground),
+              if (widget.active)
+                Positioned(
+                  left: 0,
+                  top: 7,
+                  bottom: 7,
+                  child: Container(
+                    width: 2,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.foreground.withValues(alpha: 0.58),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
                 ),
-              ),
-              const Gap(AppSpacing.sm),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: widget.caption == null
-                      ? MainAxisAlignment.center
-                      : MainAxisAlignment.start,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm,
+                  vertical: AppSpacing.sm,
+                ),
+                child: Row(
                   children: [
-                    Text(
-                      widget.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.typography.sans.copyWith(
-                        fontSize: 12.5,
-                        fontWeight: widget.active ? FontWeight.w600 : FontWeight.w500,
-                        color: widget.active
-                            ? theme.colorScheme.foreground
-                            : theme.colorScheme.foreground.withValues(alpha: 0.85),
+                    SizedBox(
+                      width: 16,
+                      child: Center(
+                        child: widget.leading ?? Icon(widget.icon, size: 14, color: foreground),
                       ),
                     ),
-                    if (widget.caption != null)
-                      Text(
-                        widget.caption!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTones.muted(theme, size: 10),
+                    const Gap(AppSpacing.sm),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: widget.caption == null
+                            ? MainAxisAlignment.center
+                            : MainAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.typography.sans.copyWith(
+                              fontSize: 12.5,
+                              fontWeight: widget.active ? FontWeight.w600 : FontWeight.w500,
+                              color: widget.active
+                                  ? theme.colorScheme.foreground
+                                  : theme.colorScheme.foreground.withValues(alpha: 0.85),
+                            ),
+                          ),
+                          if (widget.caption != null)
+                            Text(
+                              widget.caption!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTones.muted(theme, size: 10),
+                            ),
+                        ],
                       ),
+                    ),
+                    if (widget.badge != null) ...[
+                      const Gap(AppSpacing.xs),
+                      AppTag(label: widget.badge!),
+                    ],
                   ],
                 ),
               ),
-              if (widget.badge != null) ...[const Gap(AppSpacing.xs), AppTag(label: widget.badge!)],
             ],
           ),
         ),

@@ -475,9 +475,14 @@ class _SummaryLogPanel extends StatelessWidget {
           AppSpacing.lg,
         ),
         decoration: BoxDecoration(
-          color: AppTones.surfaceRaised(theme),
+          color: Color.alphaBlend(
+            accent.withValues(
+              alpha: theme.colorScheme.brightness == Brightness.dark ? 0.055 : 0.035,
+            ),
+            AppTones.surfaceRaised(theme),
+          ),
           borderRadius: BorderRadius.circular(theme.radiusLg),
-          border: Border.all(color: accent.withValues(alpha: 0.24)),
+          border: Border.all(color: accent.withValues(alpha: 0.14)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -853,7 +858,14 @@ class _LogTile extends StatelessWidget {
               const Gap(AppSpacing.sm),
               AppStatusDot(tone: tone, size: 6),
               const Gap(AppSpacing.sm),
-              SizedBox(width: 62, child: AppMonoText(entry.clockText, size: 11)),
+              SizedBox(
+                width: 62,
+                child: AppMonoText(
+                  entry.clockText,
+                  size: 11,
+                  color: theme.colorScheme.mutedForeground.withValues(alpha: 0.72),
+                ),
+              ),
               SizedBox(
                 width: 112,
                 child: Text(
@@ -877,7 +889,7 @@ class _LogTile extends StatelessWidget {
                         style: AppTones.body(
                           theme,
                           size: 11,
-                          color: theme.colorScheme.mutedForeground,
+                          color: theme.colorScheme.foreground.withValues(alpha: 0.74),
                         ),
                       )
                     : entry.isToolCall
@@ -895,7 +907,11 @@ class _LogTile extends StatelessWidget {
                   constraints: const BoxConstraints(maxWidth: 180),
                   child: AppTooltip(
                     message: entry.argsSummary,
-                    child: AppMonoText(entry.argsSummary, size: 10),
+                    child: AppMonoText(
+                      entry.argsSummary,
+                      size: 10,
+                      color: theme.colorScheme.mutedForeground.withValues(alpha: 0.72),
+                    ),
                   ),
                 ),
               ],
