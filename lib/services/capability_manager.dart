@@ -156,9 +156,9 @@ class CapabilityManager {
       if (draft == null) continue;
 
       if (line.startsWith('[')) {
-        final envMatch = RegExp(r'^\[mcp_servers\.([^\].]+)\.env\]$').firstMatch(line);
-        if (envMatch != null && envMatch.group(1) == draft.name) {
-          draft.inEnvSection = true;
+        final nestedMatch = RegExp(r'^\[mcp_servers\.([^\].]+)\.([^\]]+)\]$').firstMatch(line);
+        if (nestedMatch != null && nestedMatch.group(1) == draft.name) {
+          draft.nestedSection = nestedMatch.group(2);
           continue;
         }
         flush();
@@ -201,6 +201,7 @@ class _McpDraft {
   final String name;
   final List<String> args = [];
   final Map<String, String> env = {};
+  final Map<String, String> headers = {};
 
   String? type;
   String? command;
@@ -208,7 +209,7 @@ class _McpDraft {
   int? startupTimeoutSec;
   int? toolTimeoutSec;
   bool enabled = true;
-  bool inEnvSection = false;
+  String? nestedSection;
 
   _McpDraft(this.name);
 
@@ -218,10 +219,19 @@ class _McpDraft {
     final key = pair.group(1)!;
     final value = pair.group(2)!.trim();
 
-    if (inEnvSection) {
-      env[key] = unquote(value);
-      return;
+    switch (nestedSection) {
+      case 'env':
+        env[key] = unquote(value);
+        return;
+      case 'http_headers':
+        headers[key] = unquote(value);
+        return;
+      case 'env_http_headers':
+        _addEnvironmentHeader(key, unquote(value));
+        return;
     }
+
+    if (nestedSection != null) return;
 
     switch (key) {
       case 'type':
@@ -248,7 +258,46 @@ class _McpDraft {
           args.add(match.group(1) ?? '');
         }
         return;
+      case 'http_headers':
+        headers.addAll(_parseInlineStringMap(value, unquote));
+        return;
+      case 'env_http_headers':
+        final environmentHeaders = _parseInlineStringMap(value, unquote);
+        for (final entry in environmentHeaders.entries) {
+          _addEnvironmentHeader(entry.key, entry.value);
+        }
+        return;
     }
+  }
+
+  void _addEnvironmentHeader(String key, String environmentName) {
+    final environmentValue = Platform.environment[environmentName];
+    if (environmentValue != null && environmentValue.isNotEmpty) {
+      headers[key] = environmentValue;
+    }
+  }
+
+  Map<String, String> _parseInlineStringMap(String value, String Function(String) unquote) {
+    final trimmed = value.trim();
+    if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return const {};
+
+    final result = <String, String>{};
+    final inner = trimmed.substring(1, trimmed.length - 1);
+    var offset = 0;
+    final pairPattern = RegExp(
+      r'''\s*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_\-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')\s*''',
+    );
+
+    while (offset < inner.length) {
+      final match = pairPattern.matchAsPrefix(inner, offset);
+      if (match == null) return const {};
+      result[unquote(match.group(1)!)] = unquote(match.group(2)!);
+      offset = match.end;
+      if (offset == inner.length) break;
+      if (inner[offset] != ',') return const {};
+      offset++;
+    }
+    return result;
   }
 
   ScannedMcp? build() {
@@ -270,7 +319,7 @@ class _McpDraft {
     if (url != null && url!.isNotEmpty) {
       return ScannedMcp(
         name: name,
-        transport: {'url': url},
+        transport: {'url': url, if (headers.isNotEmpty) 'headers': headers},
         enabled: enabled,
         startupTimeoutMs: startupTimeoutSec == null ? null : startupTimeoutSec! * 1000,
         toolTimeoutMs: toolTimeoutSec == null ? null : toolTimeoutSec! * 1000,
