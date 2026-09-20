@@ -1,8 +1,28 @@
+import 'package:codexter/utils/fmt.dart';
 import 'package:codexter/utils/glob_match.dart';
 import 'package:codexter/utils/path_guard.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('Fmt', () {
+    test('优先展示命令内容', () {
+      expect(Fmt.toolArgs({'cmd': 'flutter analyze', 'workdir': '.'}), 'flutter analyze');
+    });
+
+    test('补丁参数按文件路径摘要', () {
+      expect(
+        Fmt.toolArgs({
+          'edits': [
+            {'path': 'lib/a.dart'},
+            {'path': 'lib/b.dart'},
+            {'path': 'lib/a.dart'},
+          ],
+        }),
+        'lib/a.dart, lib/b.dart',
+      );
+    });
+  });
+
   group('GlobMatch', () {
     test('** 跨目录匹配', () {
       expect(GlobMatch.matches('**/*.dart', 'lib/ui/pages/home_page.dart'), isTrue);

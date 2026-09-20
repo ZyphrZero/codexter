@@ -4,14 +4,41 @@ import 'dart:io';
 import 'package:codexter/mcp/tools/tool_bundle.dart';
 import 'package:codexter/mcp/tools/tool_context.dart';
 import 'package:codexter/models/downstream_mcp_entry.dart';
+import 'package:codexter/models/global_config.dart';
 import 'package:codexter/models/workspace.dart';
 import 'package:codexter/services/capability_runtime.dart';
+import 'package:codexter/services/computer_use_tools.dart';
 import 'package:codexter/services/process_session_manager.dart';
 import 'package:codexter/stores/log_store.dart';
 import 'package:codexter/utils/path_guard.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Computer Use 内置配置和工具定义保持完整', () {
+    final entry = DownstreamMcpEntry.builtinComputerUse(enabled: true);
+    expect(entry.name, computerUseMcpName);
+    expect(entry.displayName, computerUseMcpDisplayName);
+    expect(entry.isBuiltinComputerUse, isTrue);
+    expect(entry.enabled, isTrue);
+    expect(GlobalConfig().computerUseEnabled, isFalse);
+    expect(computerUseToolDefinitions.map((tool) => tool['name']).toSet(), {
+      'list_windows',
+      'get_window',
+      'list_apps',
+      'launch_app',
+      'get_window_state',
+      'click',
+      'press_key',
+      'type_text',
+      'scroll',
+      'set_value',
+      'drag',
+      'perform_secondary_action',
+      'activate_window',
+      'end_turn',
+    });
+  });
+
   test('下游 MCP 工具区分只读发现与可能写入的调用', () async {
     final temp = await Directory.systemTemp.createTemp('codex_downstream_annotations_');
     final processManager = ProcessSessionManager();
