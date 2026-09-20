@@ -28,6 +28,10 @@ class ScannedMcp {
 
 /// 从 Codex 目录导入 Skills / 下游 MCP，并保存手动创建的 Skill
 class CapabilityManager {
+  final String? codexDir;
+
+  const CapabilityManager({this.codexDir});
+
   Future<List<ScannedSkill>> scanCodexSkills() async {
     final roots = [
       p.join(_codexDir, 'skills'),
@@ -156,9 +160,9 @@ class CapabilityManager {
       if (draft == null) continue;
 
       if (line.startsWith('[')) {
-        final envMatch = RegExp(r'^\[mcp_servers\.([^\].]+)\.env\]$').firstMatch(line);
-        if (envMatch != null && envMatch.group(1) == draft.name) {
-          draft.inEnvSection = true;
+        final nestedMatch = RegExp(r'^\[mcp_servers\.([^\].]+)\.([^\]]+)\]$').firstMatch(line);
+        if (nestedMatch != null && nestedMatch.group(1) == draft.name) {
+          draft.nestedSection = nestedMatch.group(2);
           continue;
         }
         flush();
@@ -187,7 +191,7 @@ class CapabilityManager {
     return Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '.';
   }
 
-  String get _codexDir => p.join(_homeDir, '.codex');
+  String get _codexDir => codexDir ?? p.join(_homeDir, '.codex');
 }
 
 class _SkillMeta {
@@ -201,6 +205,7 @@ class _McpDraft {
   final String name;
   final List<String> args = [];
   final Map<String, String> env = {};
+  final Map<String, String> headers = {};
 
   String? type;
   String? command;
@@ -208,7 +213,7 @@ class _McpDraft {
   int? startupTimeoutSec;
   int? toolTimeoutSec;
   bool enabled = true;
-  bool inEnvSection = false;
+  String? nestedSection;
 
   _McpDraft(this.name);
 
@@ -218,8 +223,23 @@ class _McpDraft {
     final key = pair.group(1)!;
     final value = pair.group(2)!.trim();
 
-    if (inEnvSection) {
-      env[key] = unquote(value);
+    switch (nestedSection) {
+      case 'env':
+        env[key] = unquote(value);
+        return;
+      case 'http_headers':
+        headers[key] = unquote(value);
+        return;
+      case 'env_http_headers':
+        final environmentName = unquote(value);
+        final environmentValue = Platform.environment[environmentName];
+        if (environmentValue != null && environmentValue.isNotEmpty) {
+          headers[key] = environmentValue;
+        }
+        return;
+    }
+
+    if (nestedSection != null) {
       return;
     }
 
@@ -270,7 +290,10 @@ class _McpDraft {
     if (url != null && url!.isNotEmpty) {
       return ScannedMcp(
         name: name,
-        transport: {'url': url},
+        transport: {
+          'url': url,
+          if (headers.isNotEmpty) 'headers': headers,
+        },
         enabled: enabled,
         startupTimeoutMs: startupTimeoutSec == null ? null : startupTimeoutSec! * 1000,
         toolTimeoutMs: toolTimeoutSec == null ? null : toolTimeoutSec! * 1000,

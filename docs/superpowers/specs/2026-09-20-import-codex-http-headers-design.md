@@ -41,4 +41,9 @@
 
 ## Implementation Summary
 
-设计阶段确定：仅修改 Codex 导入解析与对应测试；不修改 HTTP 传输层和手动编辑 UI。
+已实现：
+
+- `CapabilityManager` 支持注入测试用 Codex 目录，并解析 `http_headers` / `env_http_headers`。
+- 导入的 URL MCP 将 Header 写入 transport，复用既有 `DownstreamClient` 注入逻辑。
+- 增加直接 Header、环境变量 Header、缺失环境变量和 stdio 环境变量回归测试。
+- 增加真实本地 HTTP 服务断言，确认 Header 会随下游 MCP 请求发送。

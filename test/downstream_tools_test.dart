@@ -108,8 +108,10 @@ void main() {
     final processManager = ProcessSessionManager();
     final capabilities = CapabilityRuntime();
     final logStore = LogStore();
+    String? receivedClientHeader;
 
     final serverTask = server.forEach((request) async {
+      receivedClientHeader = request.headers.value('x-client');
       final body = await utf8.decoder.bind(request).join();
       final payload = jsonDecode(body) as Map<String, dynamic>;
       final method = '${payload['method'] ?? ''}';
@@ -149,7 +151,10 @@ void main() {
 
     final entry = DownstreamMcpEntry(
       name: 'mock-rich',
-      transportJson: DownstreamMcpEntry.buildUrlJson(url: 'http://127.0.0.1:${server.port}/mcp'),
+      transportJson: DownstreamMcpEntry.buildUrlJson(
+        url: 'http://127.0.0.1:${server.port}/mcp',
+        headers: {'x-client': 'header-test'},
+      ),
       source: 'manual',
     );
     final now = DateTime.now();
@@ -163,6 +168,7 @@ void main() {
 
     try {
       await capabilities.syncMcps([entry]);
+      expect(receivedClientHeader, 'header-test');
       final context = ToolContext(
         workspace: workspace,
         pathGuard: PathGuard(temp.path),
