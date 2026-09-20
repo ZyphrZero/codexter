@@ -29,7 +29,7 @@ actual_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' 
 # 每个原生二进制都必须包含两种架构，避免只有主程序是 Universal 而插件缺架构。
 while IFS= read -r -d '' binary; do
   if /usr/bin/file -b "$binary" | grep -q 'Mach-O'; then
-    /usr/bin/lipo -verify_arch arm64 x86_64 "$binary"
+    /usr/bin/lipo "$binary" -verify_arch arm64 x86_64
   fi
 done < <(find "$app" -type f -print0)
 /usr/bin/codesign --verify --deep --strict "$app"
