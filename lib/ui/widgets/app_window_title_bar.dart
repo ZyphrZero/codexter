@@ -11,7 +11,6 @@ import 'app_about_dialog.dart';
 import 'app_spacing.dart';
 import 'app_toast.dart';
 import 'app_update_dialog.dart';
-import 'settings_dialog.dart';
 
 /// 自绘窗口框：隐藏系统标题栏后，在内容上方放一条跟主题走的拖拽栏。
 class AppWindowFrame extends StatelessWidget {
@@ -147,14 +146,6 @@ class _WindowMenuBar extends StatelessWidget {
           _WindowMenuButton(
             label: '文件',
             items: (anchorContext) => [
-              MenuButton(
-                child: const Text('全局设置'),
-                onPressed: (_) {
-                  Future<void>.microtask(() {
-                    if (anchorContext.mounted) SettingsDialog.show(anchorContext, appState);
-                  });
-                },
-              ),
               MenuButton(
                 child: const Text('打开配置目录'),
                 onPressed: (_) => unawaited(_openConfigDirectory(anchorContext)),

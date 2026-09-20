@@ -55,7 +55,6 @@ class TunnelService extends ChangeNotifier {
   bool _running = false;
   TunnelReadyInfo? _readyInfo;
   String? _configPath;
-  int _startRevision = 0;
 
   bool get isRunning => _running;
   TunnelReadyInfo? get readyInfo => _readyInfo;
@@ -69,7 +68,6 @@ class TunnelService extends ChangeNotifier {
     int readyTimeoutSec = 45,
   }) async {
     if (_running) throw Exception('Tunnel 已在运行');
-    final revision = ++_startRevision;
 
     _configPath = configPath;
     _log.clear();
@@ -80,10 +78,9 @@ class TunnelService extends ChangeNotifier {
       _appendLog('---- stopped $stopped leftover cloudflared owned by this app ----\n');
       await Future<void>.delayed(const Duration(milliseconds: 400));
     }
-    if (revision != _startRevision) throw StateError('Tunnel 启动已取消');
 
     final completer = Completer<TunnelReadyInfo>();
-    final process = await Process.start(bin, [
+    _process = await Process.start(bin, [
       'tunnel',
       '--config',
       configPath,
@@ -93,20 +90,7 @@ class TunnelService extends ChangeNotifier {
       '4',
       'run',
       tunnelId,
-    ], environment: NetworkProxy.processEnvironment());
-    // 关闭可能发生在等待 Process.start 时，不能把刚创建的进程留在后台。
-    if (revision != _startRevision) {
-      process.kill(ProcessSignal.sigterm);
-      await process.exitCode.timeout(
-        const Duration(seconds: 3),
-        onTimeout: () {
-          process.kill(ProcessSignal.sigkill);
-          return -1;
-        },
-      );
-      throw StateError('Tunnel 启动已取消');
-    }
-    _process = process;
+    ], environment: Platform.environment);
     final attached = WinKillOnCloseJob.assignPid(_process!.pid);
     if (attached || WinKillOnCloseJob.boundCurrentProcess) {
       _appendLog('---- cloudflared pid=${_process!.pid} will exit with app ----\n');
@@ -118,7 +102,6 @@ class TunnelService extends ChangeNotifier {
 
     void watch(Stream<List<int>> stream) {
       stream.listen((data) {
-        if (revision != _startRevision) return;
         final text = TextDecode.bytes(data);
         _appendLog(text);
         if (completer.isCompleted || !_readyRegex.hasMatch(text)) return;
@@ -131,15 +114,13 @@ class TunnelService extends ChangeNotifier {
       });
     }
 
-    watch(process.stdout);
-    watch(process.stderr);
+    watch(_process!.stdout);
+    watch(_process!.stderr);
 
-    process.exitCode.then((code) {
-      if (identical(_process, process)) {
-        _appendLog('---- cloudflared exited code=$code ----\n');
-        _running = false;
-        notifyListeners();
-      }
+    _process!.exitCode.then((code) {
+      _appendLog('---- cloudflared exited code=$code ----\n');
+      _running = false;
+      notifyListeners();
       if (!completer.isCompleted) {
         completer.completeError(
           TunnelProcessException(exitCode: code, message: 'cloudflared 在隧道就绪前退出', log: _log.text),
@@ -156,12 +137,10 @@ class TunnelService extends ChangeNotifier {
     });
 
     try {
-      final readyInfo = await completer.future;
-      if (revision != _startRevision) throw StateError('Tunnel 启动已取消');
-      _readyInfo = readyInfo;
+      _readyInfo = await completer.future;
       return _readyInfo!;
     } catch (_) {
-      if (revision == _startRevision) await stop();
+      await stop();
       rethrow;
     } finally {
       timeout.cancel();
@@ -169,7 +148,6 @@ class TunnelService extends ChangeNotifier {
   }
 
   Future<void> stop() async {
-    _startRevision++;
     final process = _process;
     _process = null;
     _running = false;
@@ -276,7 +254,7 @@ class CloudflaredCli {
     final result = await Process.run(
       bin,
       args,
-      environment: NetworkProxy.processEnvironment(),
+      environment: Platform.environment,
       stdoutEncoding: null,
       stderrEncoding: null,
     ).timeout(Duration(seconds: timeoutSec));

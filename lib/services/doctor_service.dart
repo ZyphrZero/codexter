@@ -4,8 +4,8 @@ import 'dart:io';
 import '../models/global_config.dart';
 import '../models/workspace.dart';
 import '../utils/app_paths.dart';
-import 'setup_service.dart';
 import 'network_proxy.dart';
+import 'setup_service.dart';
 import 'tunnel_error_classifier.dart';
 
 enum DoctorState { pass, warn, fail }
@@ -30,12 +30,11 @@ class DoctorCheck {
   });
 }
 
-/// 环境自检：出站代理、cloudflared、Cloudflare 登录、Tunnel、本地服务、Git、工作区路径。
+/// 环境自检：cloudflared、Cloudflare 登录、Tunnel 配置、本地服务、Git、工作区路径。
 class DoctorService {
-  static const proxyCheckTitle = '出站全局代理';
+  static const minCheckDisplayDuration = Duration(milliseconds: 200);
 
   static const checkTitles = <String>[
-    proxyCheckTitle,
     'Cloudflared',
     'Cloudflare 登录',
     'Tunnel 配置',
@@ -47,6 +46,16 @@ class DoctorService {
     '工作区路径',
   ];
 
+  static const startupCheckTitles = <String>[
+    'Cloudflared',
+    'Cloudflare 登录',
+    'Tunnel 配置',
+    '公网域名',
+    '本地 MCP 服务',
+    'Cloudflare Tunnel',
+    '公网连通性',
+  ];
+
   Future<List<DoctorCheck>> runAll({
     required GlobalConfig config,
     required List<Workspace> workspaces,
@@ -56,88 +65,77 @@ class DoctorService {
     void Function(String title)? onCheckStart,
     void Function(DoctorCheck check)? onCheckComplete,
   }) async {
-    Future<DoctorCheck> run(String title, Future<DoctorCheck> Function() check) async {
-      onCheckStart?.call(title);
-      DoctorCheck result;
-      try {
-        result = await check();
-      } catch (error) {
-        // 单项异常作为真实失败展示，其他并行检查仍正常完成。
-        result = DoctorCheck(
-          title: title,
-          state: DoctorState.fail,
-          detail: '检查未完成：$error',
-          hint: '处理上述错误后重新检查。',
-          rawError: '$error',
-        );
-      }
-      onCheckComplete?.call(result);
-      return result;
-    }
-
-    // 各检查互不依赖；逐项回传进度，最终结果保持声明顺序。
-    return Future.wait<DoctorCheck>([
-      run(proxyCheckTitle, () => _checkProxy(config)),
-      run(checkTitles[1], () => _checkCloudflaredBin(config)),
-      run(checkTitles[2], () => _checkCloudflareLogin(config)),
-      run(checkTitles[3], () => _checkTunnelConfig(config)),
-      run(checkTitles[4], () async => _checkDomain(config)),
-      run(checkTitles[5], () async => _checkServer(config, serverRunning)),
-      run(checkTitles[6], () async => _checkTunnel(config, tunnelRunning, tunnelError)),
-      run(checkTitles[7], () => _checkPublicRoute(config)),
-      run(checkTitles[8], _checkGit),
-      run(checkTitles[9], () => _checkWorkspacePaths(workspaces)),
-    ]);
+    return _run(
+      config: config,
+      workspaces: workspaces,
+      serverRunning: serverRunning,
+      tunnelRunning: tunnelRunning,
+      tunnelError: tunnelError,
+      includeOptional: true,
+      onCheckStart: onCheckStart,
+      onCheckComplete: onCheckComplete,
+    );
   }
 
-  Future<DoctorCheck> _checkProxy(GlobalConfig config) async {
-    if (!config.proxyEnabled) {
-      return const DoctorCheck(
-        title: proxyCheckTitle,
-        state: DoctorState.pass,
-        detail: '自定义代理未启用',
-        hint: '沿用启动时的代理环境变量；未设置则直连。',
-      );
+  Future<List<DoctorCheck>> runStartup({
+    required GlobalConfig config,
+    required List<Workspace> workspaces,
+    required bool serverRunning,
+    required bool tunnelRunning,
+    String? tunnelError,
+    void Function(String title)? onCheckStart,
+    void Function(DoctorCheck check)? onCheckComplete,
+  }) async {
+    return _run(
+      config: config,
+      workspaces: workspaces,
+      serverRunning: serverRunning,
+      tunnelRunning: tunnelRunning,
+      tunnelError: tunnelError,
+      includeOptional: false,
+      onCheckStart: onCheckStart,
+      onCheckComplete: onCheckComplete,
+    );
+  }
+
+  Future<List<DoctorCheck>> _run({
+    required GlobalConfig config,
+    required List<Workspace> workspaces,
+    required bool serverRunning,
+    required bool tunnelRunning,
+    String? tunnelError,
+    required bool includeOptional,
+    void Function(String title)? onCheckStart,
+    void Function(DoctorCheck check)? onCheckComplete,
+  }) async {
+    final results = <DoctorCheck>[];
+
+    Future<void> run(String title, Future<DoctorCheck> Function() check) async {
+      onCheckStart?.call(title);
+      final stopwatch = Stopwatch()..start();
+      final result = await check();
+      final remaining = minCheckDisplayDuration - stopwatch.elapsed;
+      if (remaining > Duration.zero) {
+        await Future<void>.delayed(remaining);
+      }
+      results.add(result);
+      onCheckComplete?.call(result);
     }
 
-    final String proxyUrl;
-    try {
-      proxyUrl = NetworkProxy.normalizeUrl(config.proxyUrl, enabled: true);
-    } on FormatException catch (error) {
-      return DoctorCheck(
-        title: proxyCheckTitle,
-        state: DoctorState.fail,
-        detail: error.message,
-        hint: '打开代理设置，填写有效的 HTTP 代理地址。',
-      );
+    await run(checkTitles[0], () => _checkCloudflaredBin(config));
+    await run(checkTitles[1], () => _checkCloudflareLogin(config));
+    await run(checkTitles[2], () => _checkTunnelConfig(config));
+    await run(checkTitles[3], () async => _checkDomain(config));
+    await run(checkTitles[4], () async => _checkServer(config, serverRunning));
+    await run(checkTitles[5], () async => _checkTunnel(config, tunnelRunning, tunnelError));
+    await run(checkTitles[6], () => _checkPublicRoute(config));
+
+    if (includeOptional) {
+      await run(checkTitles[7], _checkGit);
+      await run(checkTitles[8], () => _checkWorkspacePaths(workspaces));
     }
 
-    final uri = Uri.parse(proxyUrl);
-    Socket? socket;
-    try {
-      // 只检查代理端口，避免把目标网站或分流规则的问题误报为代理配置错误。
-      socket = await Socket.connect(
-        uri.host.replaceAll(RegExp(r'^\[|\]$'), ''),
-        uri.port,
-        timeout: const Duration(seconds: 3),
-      );
-      return DoctorCheck(
-        title: proxyCheckTitle,
-        state: DoctorState.pass,
-        detail: '已启用 · $proxyUrl',
-        hint: '代理端口可连接；不代表外网连通性。',
-      );
-    } catch (error) {
-      return DoctorCheck(
-        title: proxyCheckTitle,
-        state: DoctorState.fail,
-        detail: '无法连接代理端口：$proxyUrl',
-        hint: '请启动代理软件，或在代理设置中修改地址与端口。',
-        rawError: '$error',
-      );
-    } finally {
-      socket?.destroy();
-    }
+    return results;
   }
 
   DoctorCheck _cloudflareSkipped(String title) {
@@ -146,16 +144,19 @@ class DoctorService {
 
   Future<DoctorCheck> _checkCloudflaredBin(GlobalConfig config) async {
     if (!config.useCloudflared) return _cloudflareSkipped('Cloudflared');
-    final bin = await SetupService().findCloudflaredBin(configuredPath: config.cloudflaredBin);
-    if (bin != null) {
+    final candidates = <String>[
+      if (config.cloudflaredBin != null) config.cloudflaredBin!,
+      await AppPaths.cloudflaredPath,
+    ];
+    for (final bin in candidates) {
+      if (!await File(bin).exists()) continue;
       try {
         final result = await Process.run(bin, ['--version']);
         if (result.exitCode == 0) {
-          final version = '${result.stdout}'.trim();
           return DoctorCheck(
             title: 'Cloudflared',
             state: DoctorState.pass,
-            detail: '$version\n$bin',
+            detail: '${result.stdout}'.trim(),
           );
         }
       } catch (_) {}

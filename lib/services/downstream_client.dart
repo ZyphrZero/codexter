@@ -5,8 +5,8 @@ import '../app_info.dart';
 import '../models/downstream_mcp_entry.dart';
 import '../utils/path_guard.dart';
 import 'computer_use_client.dart';
-import 'network_proxy.dart';
 import 'computer_use_tools.dart';
+import 'network_proxy.dart';
 
 enum DownstreamState { idle, connecting, connected, failed, closed }
 

@@ -10,6 +10,7 @@ import 'services/tray_service.dart';
 import 'stores/app_state.dart';
 import 'ui/app_shell.dart';
 import 'ui/pages/first_run_page.dart';
+import 'ui/pages/startup_check_page.dart';
 import 'ui/theme/app_theme.dart';
 import 'ui/widgets/close_window_dialog.dart';
 import 'utils/win_kill_job.dart';
@@ -46,6 +47,7 @@ class _CodexterAppState extends State<CodexterApp> with WindowListener, WidgetsB
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   bool _exiting = false;
   bool _closePromptOpen = false;
+  bool _startupGateCompleted = false;
 
   @override
   void initState() {
@@ -146,6 +148,15 @@ class _CodexterAppState extends State<CodexterApp> with WindowListener, WidgetsB
               child: ToastLayer(
                 child: widget.appState.isFirstRun
                     ? FirstRunPage(appState: widget.appState)
+                    : !_startupGateCompleted
+                    ? StartupCheckPage(
+                        appState: widget.appState,
+                        onContinue: () {
+                          if (mounted) {
+                            setState(() => _startupGateCompleted = true);
+                          }
+                        },
+                      )
                     : AppShell(appState: widget.appState),
               ),
             ),

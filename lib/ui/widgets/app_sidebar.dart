@@ -61,7 +61,12 @@ class AppSidebar extends StatelessWidget {
                     active: _isActive(AppPage.mcpManage),
                     onPressed: () => appState.setCurrentPage(AppPage.mcpManage),
                   ),
-                  _buildDoctorItem(theme),
+                  _NavItem(
+                    icon: BootstrapIcons.activity,
+                    label: '环境检查',
+                    active: _isActive(AppPage.doctor),
+                    onPressed: () => appState.setCurrentPage(AppPage.doctor),
+                  ),
                   _NavItem(
                     icon: BootstrapIcons.gear,
                     label: '全局设置',
@@ -86,63 +91,6 @@ class AppSidebar extends StatelessWidget {
   String? get _enabledMcpCount {
     final count = appState.mcps.where((mcp) => mcp.enabled).length;
     return count == 0 ? null : '$count';
-  }
-
-  Widget _buildDoctorItem(ThemeData theme) {
-    final running = appState.doctorRunning;
-    final starting = appState.servicesStarting;
-    final completed = appState.doctorCompletedCount;
-    final total = appState.doctorTotalCount;
-    final failed = appState.doctorFailedCount;
-    final warned = appState.doctorWarningCount;
-    final hasResult = appState.doctorCheckedAt != null;
-    final incomplete = appState.doctorError != null;
-    final color = running || starting
-        ? AppTones.info
-        : incomplete || failed > 0
-        ? theme.colorScheme.destructive
-        : warned > 0
-        ? AppTones.warning
-        : hasResult
-        ? AppTones.success
-        : theme.colorScheme.mutedForeground;
-    final caption = running
-        ? '并行检查中 · ${appState.doctorRunningTitles.length} 项进行中'
-        : starting
-        ? '准备检查 · 服务启动中'
-        : incomplete
-        ? '检查未完成 · 已完成 $completed/$total'
-        : !hasResult
-        ? '等待首次检查'
-        : failed > 0
-        ? '$failed 项失败 · $warned 项注意'
-        : warned > 0
-        ? '$warned 项需注意 · 其余通过'
-        : '$total 项检查全部通过';
-    final badge = running
-        ? '$completed/$total'
-        : starting
-        ? '等待'
-        : incomplete
-        ? '异常'
-        : !hasResult
-        ? null
-        : failed + warned > 0
-        ? '${failed + warned}'
-        : '通过';
-
-    return _NavItem(
-      leading: running || starting
-          ? const SizedBox.square(dimension: 13, child: CircularProgressIndicator())
-          : Icon(BootstrapIcons.activity, size: 14, color: color),
-      label: '环境检查',
-      caption: caption,
-      badge: badge,
-      badgeColor: color,
-      progress: running ? completed / total : null,
-      active: _isActive(AppPage.doctor),
-      onPressed: () => appState.setCurrentPage(AppPage.doctor),
-    );
   }
 
   bool _isActive(AppPage page) {
@@ -344,8 +292,6 @@ class _NavItem extends StatefulWidget {
   final String label;
   final String? caption;
   final String? badge;
-  final Color? badgeColor;
-  final double? progress;
   final bool active;
   final VoidCallback onPressed;
 
@@ -357,8 +303,6 @@ class _NavItem extends StatefulWidget {
     this.leading,
     this.caption,
     this.badge,
-    this.badgeColor,
-    this.progress,
   });
 
   @override
@@ -451,16 +395,12 @@ class _NavItemState extends State<_NavItem> {
                               overflow: TextOverflow.ellipsis,
                               style: AppTones.muted(theme, size: 10),
                             ),
-                          if (widget.progress != null) ...[
-                            const Gap(AppSpacing.xs),
-                            SizedBox(height: 2, child: Progress(progress: widget.progress!)),
-                          ],
                         ],
                       ),
                     ),
                     if (widget.badge != null) ...[
                       const Gap(AppSpacing.xs),
-                      AppTag(label: widget.badge!, color: widget.badgeColor),
+                      AppTag(label: widget.badge!),
                     ],
                   ],
                 ),
@@ -486,85 +426,87 @@ class _ServiceFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final serverTone = appState.serverRunning
-        ? AppStatusTone.live
-        : appState.servicesStarting
-        ? AppStatusTone.warn
-        : AppStatusTone.error;
+    final serverTone = appState.serverRunning ? AppStatusTone.live : AppStatusTone.error;
     final tunnelTone = !appState.config.useCloudflared
-        ? AppStatusTone.idle
+        ? AppStatusTone.warn
         : appState.tunnelRunning
         ? AppStatusTone.live
-        : appState.busy
-        ? AppStatusTone.warn
         : AppStatusTone.error;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: AppTones.serviceCardSurface(theme),
         border: Border(top: BorderSide(color: theme.colorScheme.border)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _ServiceStatusRow(
+          _StatusCard(
             tone: serverTone,
+            icon: LucideIcons.server,
             label: '本地服务',
             value: appState.serverRunning
-                ? '运行中'
-                : appState.servicesStarting
-                ? '启动中'
-                : '未启动',
-            detail: appState.serverRunning
                 ? '${appState.config.host}:${appState.config.port}'
-                : appState.servicesStarting
-                ? '正在后台启动本地服务…'
                 : '服务尚未启动',
+            action: appState.config.proxyEnabled
+                ? AppTooltip(
+                    message:
+                        '网络代理 · ${Uri.tryParse(appState.config.proxyUrl)?.scheme.toUpperCase() ?? 'HTTP'}\n点击打开代理设置',
+                    alignment: Alignment.bottomCenter,
+                    anchorAlignment: Alignment.topCenter,
+                    child: SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: Button(
+                        style: ButtonStyle.secondary(
+                          density: ButtonDensity.icon,
+                          size: ButtonSize.small,
+                        ),
+                        onPressed: () => SettingsDialog.show(
+                          context,
+                          appState,
+                          initialSection: SettingsDialog.networkProxySection,
+                        ),
+                        child: const Icon(BootstrapIcons.globe, size: 13, color: AppTones.success),
+                      ),
+                    ),
+                  )
+                : null,
           ),
-          _ServiceStatusRow(
-            tone: appState.config.proxyEnabled ? AppStatusTone.live : AppStatusTone.idle,
-            label: '全局代理',
-            value: appState.config.proxyEnabled ? '已启用' : '跟随环境',
-            detail: appState.config.proxyEnabled
-                ? '${appState.config.proxyUrl}\n标识仅表示配置已启用，不代表实时连通性。'
-                : '自定义代理未启用；沿用启动环境的代理变量，未设置时直连。',
-            actionIcon: BootstrapIcons.gear,
-            actionLabel: '配置出站全局代理',
-            onAction: () => SettingsDialog.show(
-              context,
-              appState,
-              initialSection: SettingsSection.proxy,
-            ),
-          ),
-          _ServiceStatusRow(
+          const Gap(AppSpacing.sm),
+          _StatusCard(
             tone: tunnelTone,
+            icon: LucideIcons.cloud,
             label: 'Tunnel',
             value: !appState.config.useCloudflared
-                ? '已关闭'
-                : appState.tunnelRunning
-                ? '已连接'
-                : appState.busy
-                ? '连接中'
-                : '未连接',
-            detail: !appState.config.useCloudflared
                 ? '公网访问已关闭'
                 : appState.config.domain.isEmpty
                 ? '尚未配置域名'
                 : appState.config.domain,
-            actionIcon: BootstrapIcons.arrowRepeat,
-            actionLabel: '重启 Tunnel',
-            onAction: appState.busy || !appState.config.useCloudflared
-                ? null
-                : () async {
-                    await appState.restartTunnel();
-                    if (!context.mounted) return;
-                    if (appState.lastError == null) {
-                      AppToast.success(context, 'Tunnel 已重启');
-                    } else {
-                      AppToast.error(context, '重启失败：${appState.lastErrorSummary}');
-                    }
-                  },
+            action: AppTooltip(
+              message: '重启 Tunnel',
+              alignment: Alignment.bottomCenter,
+              anchorAlignment: Alignment.topCenter,
+              child: SizedBox(
+                width: 32,
+                height: 32,
+                child: Button(
+                  style: ButtonStyle.secondary(density: ButtonDensity.icon, size: ButtonSize.small),
+                  onPressed: appState.busy || !appState.config.useCloudflared
+                      ? null
+                      : () async {
+                          await appState.restartTunnel();
+                          if (!context.mounted) return;
+                          if (appState.lastError == null) {
+                            AppToast.success(context, 'Tunnel 已重启');
+                          } else {
+                            AppToast.error(context, '重启失败：${appState.lastErrorSummary}');
+                          }
+                        },
+                  child: const Icon(BootstrapIcons.arrowRepeat, size: 13),
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -572,87 +514,118 @@ class _ServiceFooter extends StatelessWidget {
   }
 }
 
-class _ServiceStatusRow extends StatelessWidget {
+class _StatusCard extends StatefulWidget {
+  static const _height = 60.0;
+  static const _iconSize = 32.0;
+
   final AppStatusTone tone;
+  final IconData icon;
   final String label;
   final String value;
-  final String detail;
-  final IconData? actionIcon;
-  final String? actionLabel;
-  final VoidCallback? onAction;
+  final Widget? action;
 
-  const _ServiceStatusRow({
+  const _StatusCard({
     required this.tone,
+    required this.icon,
     required this.label,
     required this.value,
-    required this.detail,
-    this.actionIcon,
-    this.actionLabel,
-    this.onAction,
+    this.action,
   });
+
+  @override
+  State<_StatusCard> createState() => _StatusCardState();
+}
+
+class _StatusCardState extends State<_StatusCard> {
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final statusColor = switch (tone) {
-      AppStatusTone.live => theme.colorScheme.foreground,
+    final toneColor = switch (widget.tone) {
+      AppStatusTone.live => AppTones.success,
       AppStatusTone.warn => AppTones.warning,
       AppStatusTone.error => theme.colorScheme.destructive,
       AppStatusTone.idle => theme.colorScheme.mutedForeground,
     };
+    final baseSurface = AppTones.serviceCardSurface(theme);
+    final surface = _hovered ? AppTones.surfaceRaised(theme) : baseSurface;
 
-    return SizedBox(
-      height: 28,
-      child: Row(
-        children: [
-          Expanded(
-            child: AppTooltip(
-              message: '$label · $value\n$detail',
-              alignment: Alignment.bottomCenter,
-              anchorAlignment: Alignment.topCenter,
-              child: Row(
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        height: _StatusCard._height,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: surface,
+          borderRadius: BorderRadius.circular(theme.radiusMd),
+          border: Border.all(
+            color: _hovered ? AppTones.borderSubtle(theme) : AppTones.borderFaint(theme),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: _StatusCard._iconSize,
+              height: _StatusCard._iconSize,
+              child: Stack(
+                clipBehavior: Clip.none,
                 children: [
-                  AppStatusDot(tone: tone, size: 6, glow: false),
-                  const Gap(AppSpacing.sm),
-                  Text(label, style: AppTones.muted(theme, size: 11.5)),
-                  const Gap(AppSpacing.sm),
-                  Expanded(
-                    child: Text(
-                      value,
-                      textAlign: TextAlign.right,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTones.body(theme, size: 11, color: statusColor),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    width: _StatusCard._iconSize,
+                    height: _StatusCard._iconSize,
+                    decoration: BoxDecoration(
+                      color: toneColor.withValues(alpha: _hovered ? 0.13 : 0.10),
+                      borderRadius: BorderRadius.circular(theme.radiusMd),
+                    ),
+                    child: Icon(widget.icon, size: 16, color: toneColor.withValues(alpha: 0.94)),
+                  ),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(color: surface, shape: BoxShape.circle),
+                      child: AppStatusDot(tone: widget.tone, size: 6),
                     ),
                   ),
                 ],
               ),
             ),
-          ),
-          const Gap(AppSpacing.sm),
-          SizedBox.square(
-            dimension: 24,
-            child: actionIcon == null
-                ? null
-                : Semantics(
-                    label: actionLabel,
-                    button: true,
-                    child: AppTooltip(
-                      message: actionLabel!,
-                      alignment: Alignment.bottomCenter,
-                      anchorAlignment: Alignment.topCenter,
-                      child: Button(
-                        style: ButtonStyle.secondary(
-                          density: ButtonDensity.icon,
-                          size: ButtonSize.small,
-                        ),
-                        onPressed: onAction,
-                        child: Icon(actionIcon, size: 12),
-                      ),
+            const Gap(AppSpacing.md),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTones.body(theme, size: 11.5).copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  const Gap(2),
+                  AppTooltip(
+                    message: widget.value,
+                    alignment: Alignment.bottomCenter,
+                    anchorAlignment: Alignment.topCenter,
+                    child: AppMonoText(
+                      widget.value,
+                      size: 10.5,
+                      maxLines: 1,
+                      color: theme.colorScheme.foreground.withValues(alpha: 0.72),
                     ),
                   ),
-          ),
-        ],
+                ],
+              ),
+            ),
+            if (widget.action != null) ...[const Gap(AppSpacing.sm), Center(child: widget.action!)],
+          ],
+        ),
       ),
     );
   }

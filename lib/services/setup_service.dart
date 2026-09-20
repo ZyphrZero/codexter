@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:path/path.dart' as p;
 import '../models/global_config.dart';
 import '../platform/desktop_platform.dart';
@@ -16,16 +17,33 @@ const cloudflaredVersion = '2026.7.2';
 class CloudflareLoginResult {
   final bool success;
   final bool alreadyLoggedIn;
+  final bool authorizationPending;
   final String? error;
 
-  const CloudflareLoginResult._({required this.success, this.alreadyLoggedIn = false, this.error});
+  const CloudflareLoginResult._({
+    required this.success,
+    this.alreadyLoggedIn = false,
+    this.authorizationPending = false,
+    this.error,
+  });
 
   static const alreadyDone = CloudflareLoginResult._(success: true, alreadyLoggedIn: true);
   static const done = CloudflareLoginResult._(success: true);
+  static const pending = CloudflareLoginResult._(success: false, authorizationPending: true);
 
   static CloudflareLoginResult failed(String error) {
     return CloudflareLoginResult._(success: false, error: error);
   }
+}
+
+class TunnelNameConflictException implements Exception {
+  final String name;
+  final String tunnelId;
+
+  const TunnelNameConflictException(this.name, this.tunnelId);
+
+  @override
+  String toString() => 'Tunnel「$name」已存在';
 }
 
 class DownloadProgress {
@@ -39,6 +57,10 @@ class DownloadProgress {
 
 /// 首次配置向导使用的服务：cloudflared 安装、Cloudflare 登录、Tunnel 创建与 DNS
 class SetupService {
+  static final _uuid = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
   Future<String> get cloudflaredPath => AppPaths.cloudflaredPath;
 
   String normalizeDomain(String domain) {
@@ -53,36 +75,30 @@ class SetupService {
     }
   }
 
-  /// 统一返回绝对路径，不能把 PATH 中的命令名作为文件路径保存。
-  Future<String?> findCloudflaredBin({String? configuredPath}) async {
-    final executableName = Platform.isWindows ? 'cloudflared.exe' : 'cloudflared';
-    final pathDirectories = (Platform.environment['PATH'] ?? '').split(
-      Platform.isWindows ? ';' : ':',
-    );
-    final candidates = <String>[
-      if (configuredPath != null && configuredPath.isNotEmpty) configuredPath,
-      await cloudflaredPath,
-      if (Platform.isWindows) ...[
-        p.join(_homeDir(), executableName),
-        r'C:\Program Files (x86)\cloudflared\cloudflared.exe',
-        r'C:\Program Files\cloudflared\cloudflared.exe',
-      ] else ...[
-        '/usr/local/bin/cloudflared',
-        '/usr/bin/cloudflared',
-        '/opt/homebrew/bin/cloudflared',
-      ],
-      for (final directory in pathDirectories)
-        if (directory.isNotEmpty)
-          p.join(
-            Platform.isWindows ? directory.replaceAll(RegExp(r'^"|"$'), '') : directory,
-            executableName,
-          ),
-    ];
+  Future<String?> findCloudflaredBin() async {
+    final managed = await cloudflaredPath;
+    if (await File(managed).exists()) return managed;
 
-    for (final candidate in candidates.toSet()) {
-      final file = File(candidate);
-      if (await file.exists()) return p.normalize(file.absolute.path);
+    final candidates = Platform.isWindows
+        ? <String>[
+            p.join(_homeDir(), 'cloudflared.exe'),
+            r'C:\Program Files (x86)\cloudflared\cloudflared.exe',
+            r'C:\Program Files\cloudflared\cloudflared.exe',
+          ]
+        : <String>[
+            '/usr/local/bin/cloudflared',
+            '/usr/bin/cloudflared',
+            '/opt/homebrew/bin/cloudflared',
+          ];
+
+    for (final candidate in candidates) {
+      if (await File(candidate).exists()) return candidate;
     }
+
+    try {
+      final result = await Process.run('cloudflared', ['--version']);
+      if (result.exitCode == 0) return 'cloudflared';
+    } catch (_) {}
     return null;
   }
 
@@ -175,12 +191,19 @@ class SetupService {
     try {
       final process = await Process.start(bin, ['tunnel', 'login'], environment: environment);
       // 自动打开只交给 cloudflared。应用仅提供完整链接供用户手动复制，避免重复标签页。
-      final output = CloudflaredLoginOutput(onLoginUrl: onLoginUrl);
+      String? reportedLoginUrl;
+      final output = CloudflaredLoginOutput(
+        onLoginUrl: (url) {
+          reportedLoginUrl = url;
+          onLoginUrl?.call(url);
+        },
+      );
       final results = await Future.wait<Object>([
         process.exitCode,
         output.collect(process.stdout, process.stderr),
       ]);
       final exitCode = results[0] as int;
+      final loginOutput = results[1] as String;
       if (await generatedCert.exists()) {
         await certFile.parent.create(recursive: true);
         if (await certFile.exists()) await certFile.delete();
@@ -192,7 +215,16 @@ class SetupService {
       if (backup != null && await backup.exists()) {
         await backup.rename(certFile.path);
       }
-      return CloudflareLoginResult.failed('登录未完成 (exit $exitCode)：${results[1]}');
+      // cloudflared 的登录传输只轮询有限次数。部分代理/网络会让未授权响应立即返回，
+      // 使轮询在用户来得及确认浏览器授权前就耗尽；这种情况是“待授权”，不是认证失败。
+      final normalizedOutput = loginOutput.toLowerCase();
+      final waitingForAuthorization =
+          reportedLoginUrl != null &&
+          normalizedOutput.contains('failed to fetch resource') &&
+          normalizedOutput.contains('waiting for login');
+      if (waitingForAuthorization) return CloudflareLoginResult.pending;
+
+      return CloudflareLoginResult.failed('登录未完成 (exit $exitCode)：$loginOutput');
     } catch (_) {
       if (backup != null && await backup.exists() && !await certFile.exists()) {
         await backup.rename(certFile.path);
@@ -208,55 +240,122 @@ class SetupService {
     }
   }
 
-  Future<String> createTunnel(String bin, String tunnelName) async {
-    final originCert = await _requireOriginCert();
+  Future<String> createTunnel(String _, String tunnelName) async {
+    final name = tunnelName.trim();
+    if (name.isEmpty) throw const FormatException('Tunnel 名称不能为空');
+
+    final credentials = await _readOriginCredentials();
+    final random = Random.secure();
+    final tunnelSecret = base64Encode(List<int>.generate(32, (_) => random.nextInt(256)));
+    Map<String, dynamic> result;
+    try {
+      result = await _cloudflareApi(
+        credentials,
+        'POST',
+        Uri.https('api.cloudflare.com', '/client/v4/accounts/${credentials.accountId}/cfd_tunnel'),
+        body: {'name': name, 'tunnel_secret': tunnelSecret},
+      );
+    } catch (error) {
+      final message = '$error'.toLowerCase();
+      final nameConflict =
+          message.contains('code: 1013') ||
+          (message.contains('tunnel') &&
+              (message.contains('already exists') || message.contains('already have')));
+      if (!nameConflict) rethrow;
+      final existingId = await _findTunnelIdByName(credentials, name);
+      throw TunnelNameConflictException(name, existingId);
+    }
+
+    final id = '${result['id'] ?? ''}'.toLowerCase();
+    if (!_uuid.hasMatch(id)) throw const FormatException('Cloudflare 创建结果中缺少有效 Tunnel ID');
+
     final staging = await Directory(await AppPaths.cloudflareDir).createTemp('.create-tunnel-');
     final pending = File(p.join(staging.path, 'credentials.json'));
+    await pending.writeAsString(
+      jsonEncode({
+        'AccountTag': '${result['account_tag'] ?? credentials.accountId}',
+        'TunnelSecret': tunnelSecret,
+        'TunnelID': id,
+      }),
+      flush: true,
+    );
+    if (!await _adoptTunnelCredentials(id, pending)) {
+      throw Exception('Tunnel「$name」已创建（$id），但本机未能保存有效运行凭据。');
+    }
     try {
-      return await CloudflaredTunnelSetup(
-        run: (args) =>
-            CloudflaredCli.runDetailed(bin, ['tunnel', '--origincert', originCert, ...args]),
-        adoptCreatedCredentials: (id) => _adoptTunnelCredentials(id, pending),
-        hasExistingCredentials: (id) async =>
-            await ensureTunnelCredentials(id) &&
-            await CloudflaredTunnelSetup.credentialsMatch(
-              File(await AppPaths.credentialsPath(id)),
-              id,
-            ),
-      ).create(tunnelName, pending.path);
-    } finally {
-      // 创建后若凭据收纳失败，保留文件供恢复，不能删掉远端 Tunnel 唯一的运行凭据。
-      if (!await pending.exists()) {
-        try {
-          await staging.delete(recursive: true);
-        } catch (_) {}
-      }
+      await staging.delete(recursive: true);
+    } catch (_) {}
+    return id;
+  }
+
+  Future<String> _findTunnelIdByName(_CloudflareOriginCredentials credentials, String name) async {
+    final result = await _cloudflareApi(
+      credentials,
+      'GET',
+      Uri.https('api.cloudflare.com', '/client/v4/accounts/${credentials.accountId}/cfd_tunnel', {
+        'name': name,
+        'is_deleted': 'false',
+        'per_page': '100',
+      }),
+    );
+    final items = result['items'];
+    if (items is! List) throw const FormatException('Cloudflare Tunnel 列表格式异常');
+    final ids = items
+        .whereType<Map>()
+        .where((item) => item['name'] == name)
+        .map((item) => '${item['id'] ?? ''}'.toLowerCase())
+        .where(_uuid.hasMatch)
+        .toSet();
+    if (ids.length != 1) {
+      throw Exception('Tunnel 名称「$name」已存在，但未能唯一确认其 ID；请修改名称或在 Cloudflare 核对。');
+    }
+    return ids.single;
+  }
+
+  Future<void> deleteTunnel(String tunnelId) async {
+    if (!_uuid.hasMatch(tunnelId)) throw const FormatException('Tunnel ID 无效');
+    final credentials = await _readOriginCredentials();
+    await _cloudflareApi(
+      credentials,
+      'DELETE',
+      Uri.https(
+        'api.cloudflare.com',
+        '/client/v4/accounts/${credentials.accountId}/cfd_tunnel/$tunnelId',
+        {'cascade': 'true'},
+      ),
+    );
+
+    final localCredentials = File(await AppPaths.credentialsPath(tunnelId));
+    if (await localCredentials.exists()) {
+      try {
+        await localCredentials.delete();
+      } catch (_) {}
     }
   }
 
-  /// 确保域名 DNS 指向指定 Tunnel。
-  ///
-  /// cloudflared 即使 exitCode=0，也可能把不属于当前 cert Zone 的 hostname
-  /// 当成相对名称并追加 Zone，因此必须检查成功输出中的实际 hostname。
-  Future<void> routeDns(String bin, String tunnelId, String domain) async {
-    final originCert = await _requireOriginCert();
+  /// 使用与 cloudflared `tunnel route dns` 相同的 Zone-level route API。
+  /// cloudflared 的 REST client 不读取系统代理，因此由 Codexter 自己发出请求，
+  /// 让 HTTP / SOCKS5 代理覆盖整个初始化控制面。
+  Future<void> routeDns(String _, String tunnelId, String domain) async {
+    final credentials = await _readOriginCredentials();
+    final requestedDomain = normalizeDomain(domain);
+    if (requestedDomain.isEmpty) throw const FormatException('公网域名不能为空');
+    if (!_uuid.hasMatch(tunnelId)) throw const FormatException('Tunnel ID 无效');
+
     try {
-      final result = await CloudflaredCli.runDetailed(bin, [
-        'tunnel',
-        '--origincert',
-        originCert,
-        'route',
-        'dns',
-        '--overwrite-dns',
-        tunnelId,
-        domain,
-      ]);
-      final actualHostname = _findUnexpectedDnsHostname(result.combinedOutput, domain);
-      if (actualHostname != null) {
-        throw Exception(
-          'DNS-ZONE-MISMATCH：当前 cert.pem 不属于 $domain 对应的 Cloudflare Zone。'
-          'cloudflared 实际配置的是 $actualHostname，而不是 $domain。',
-        );
+      final result = await _cloudflareApi(
+        credentials,
+        'PUT',
+        Uri.https(
+          'api.cloudflare.com',
+          '/client/v4/zones/${credentials.zoneId}/tunnels/$tunnelId/routes',
+        ),
+        body: {'type': 'dns', 'user_hostname': requestedDomain, 'overwrite_existing': true},
+      );
+
+      final actualDomain = normalizeDomain('${result['name'] ?? ''}');
+      if (actualDomain.isNotEmpty && actualDomain != requestedDomain) {
+        throw Exception('DNS-ZONE-MISMATCH：Cloudflare 实际配置的是 $actualDomain，而不是 $requestedDomain。');
       }
     } catch (error) {
       final message = '$error';
@@ -330,17 +429,6 @@ class SetupService {
     }
   }
 
-  String? _findUnexpectedDnsHostname(String output, String domain) {
-    final normalized = normalizeDomain(domain);
-    if (normalized.isEmpty || output.isEmpty) return null;
-    final pattern = RegExp(
-      '${RegExp.escape(normalized)}\\.([a-z0-9-]+(?:\\.[a-z0-9-]+)+)',
-      caseSensitive: false,
-    );
-    final match = pattern.firstMatch(output);
-    return match?.group(0)?.replaceAll(RegExp(r'[.,;:]$'), '');
-  }
-
   bool _shouldReloginForDns(String message) {
     return _isDnsAuthorizationError(message) || message.toLowerCase().contains('dns-zone-mismatch');
   }
@@ -348,11 +436,93 @@ class SetupService {
   bool _isDnsAuthorizationError(String message) {
     final text = message.toLowerCase();
     return text.contains('1003') ||
+        text.contains('9109') ||
         text.contains('unauthorized') ||
         text.contains('not authorized') ||
         text.contains('permission') ||
         text.contains('无权管理') ||
         text.contains('未找到当前环境的 cloudflare cert.pem');
+  }
+
+  Future<_CloudflareOriginCredentials> _readOriginCredentials() async {
+    final path = await _requireOriginCert();
+    final content = await File(path).readAsString();
+    final match = RegExp(
+      r'-----BEGIN ARGO TUNNEL TOKEN-----\s*(.*?)\s*-----END ARGO TUNNEL TOKEN-----',
+      dotAll: true,
+    ).firstMatch(content);
+    if (match == null) throw const FormatException('Cloudflare cert.pem 格式无效，请重新登录');
+
+    try {
+      final encoded = match.group(1)!.replaceAll(RegExp(r'\s+'), '');
+      final decoded = jsonDecode(utf8.decode(base64Decode(base64.normalize(encoded))));
+      if (decoded is! Map) throw const FormatException();
+      final accountId = '${decoded['accountID'] ?? ''}'.trim();
+      final zoneId = '${decoded['zoneID'] ?? ''}'.trim();
+      final apiToken = '${decoded['apiToken'] ?? ''}'.trim();
+      if (accountId.isEmpty || zoneId.isEmpty || apiToken.isEmpty) {
+        throw const FormatException();
+      }
+      return _CloudflareOriginCredentials(accountId: accountId, zoneId: zoneId, apiToken: apiToken);
+    } on FormatException {
+      throw const FormatException('Cloudflare cert.pem 缺少有效账号、Zone 或 API 凭据，请重新登录');
+    }
+  }
+
+  Future<Map<String, dynamic>> _cloudflareApi(
+    _CloudflareOriginCredentials credentials,
+    String method,
+    Uri uri, {
+    Object? body,
+  }) async {
+    final client = NetworkProxy.createHttpClient()
+      ..connectionTimeout = const Duration(seconds: 15)
+      ..idleTimeout = const Duration(seconds: 15);
+    try {
+      final request = await client.openUrl(method, uri);
+      request.headers
+        ..set(HttpHeaders.authorizationHeader, 'Bearer ${credentials.apiToken}')
+        ..set(HttpHeaders.acceptHeader, 'application/json;version=1')
+        ..set(HttpHeaders.userAgentHeader, 'Codexter cloudflared/$cloudflaredVersion');
+      if (body != null) {
+        request.headers.contentType = ContentType.json;
+        request.write(jsonEncode(body));
+      }
+
+      final response = await request.close().timeout(const Duration(seconds: 20));
+      final text = await response.transform(utf8.decoder).join();
+      Map<String, dynamic>? envelope;
+      try {
+        final decoded = jsonDecode(text);
+        if (decoded is Map) envelope = Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+
+      final success = envelope?['success'] == true;
+      if (response.statusCode < 200 || response.statusCode >= 300 || !success) {
+        final errors = envelope?['errors'];
+        final details = errors is List
+            ? errors
+                  .whereType<Map>()
+                  .map(
+                    (error) =>
+                        'code: ${error['code'] ?? '-'}, reason: ${error['message'] ?? 'unknown'}',
+                  )
+                  .join('; ')
+            : '';
+        throw Exception(
+          details.isEmpty
+              ? 'Cloudflare API $method ${uri.path} 失败（HTTP ${response.statusCode}）'
+              : 'Cloudflare API $method ${uri.path} 失败：$details',
+        );
+      }
+
+      final result = envelope?['result'];
+      if (result is Map) return Map<String, dynamic>.from(result);
+      if (result is List) return {'items': result};
+      return {'value': result};
+    } finally {
+      client.close(force: true);
+    }
   }
 
   /// 旧版本的 Tunnel JSON 可以安全复制到当前环境；账号级 cert.pem 不迁移。
@@ -460,4 +630,16 @@ class SetupService {
   String _homeDir() {
     return Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '.';
   }
+}
+
+class _CloudflareOriginCredentials {
+  final String accountId;
+  final String zoneId;
+  final String apiToken;
+
+  const _CloudflareOriginCredentials({
+    required this.accountId,
+    required this.zoneId,
+    required this.apiToken,
+  });
 }

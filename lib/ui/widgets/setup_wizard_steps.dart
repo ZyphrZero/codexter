@@ -125,8 +125,6 @@ class CloudflaredStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('第 2 步：安装 cloudflared', style: AppTones.title(theme, size: 14)),
-        const Gap(AppSpacing.md),
         if (binPath != null)
           AppNotice(
             tone: AppNoticeTone.success,
@@ -181,12 +179,9 @@ class DomainStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('第 3 步：公网域名', style: AppTones.title(theme, size: 14)),
-        const Gap(AppSpacing.md),
         AppField(
           label: '域名',
           controller: controller,
@@ -211,13 +206,11 @@ class TunnelStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('第 4 步：创建 Tunnel', style: AppTones.title(theme, size: 14)),
-        const Gap(AppSpacing.md),
         AppField(label: 'Tunnel 名称', controller: controller, placeholder: 'codex-mcp'),
-        const Gap(AppSpacing.lg),
-        const AppNotice(
-          message: '点击「下一步」会依次完成：Cloudflare 登录、创建 Tunnel、配置 DNS、写入配置文件。',
-          detail: '授权时由 cloudflared 自动打开浏览器；未打开时可复制界面提供的完整授权链接。',
+        const Gap(AppSpacing.md),
+        Text(
+          '点击「下一步」后会自动完成 Cloudflare 授权、Tunnel 创建和 DNS 配置。',
+          style: AppTones.muted(theme, size: 11),
         ),
       ],
     );
@@ -236,8 +229,6 @@ class DoneStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('配置完成', style: AppTones.title(theme, size: 14)),
-        const Gap(AppSpacing.md),
         const AppNotice(
           tone: AppNoticeTone.success,
           message: '公网入口已就绪',

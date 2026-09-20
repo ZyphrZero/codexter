@@ -1,13 +1,12 @@
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import '../../services/doctor_service.dart';
 import '../../stores/app_state.dart';
-import '../../utils/fmt.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import '../widgets/app_spacing.dart';
 import '../widgets/app_toast.dart';
 
-/// 环境检查：出站代理、cloudflared、登录、Tunnel、服务、Git、工作区路径
+/// 环境检查：cloudflared、登录、Tunnel、服务、Git、工作区路径
 class DoctorPage extends StatefulWidget {
   final AppState appState;
 
@@ -20,6 +19,12 @@ class DoctorPage extends StatefulWidget {
 class _DoctorPageState extends State<DoctorPage> {
   String? _repairingTitle;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runChecks());
+  }
+
   Future<void> _runChecks() => widget.appState.runDoctor();
 
   Future<void> _repairCheck(DoctorCheck check) async {
@@ -28,17 +33,7 @@ class _DoctorPageState extends State<DoctorPage> {
     try {
       await widget.appState.repairDoctorCheck(check);
       await _runChecks();
-      if (!mounted) return;
-      final error = widget.appState.doctorError;
-      if (error != null) {
-        AppToast.error(context, '修复后检查未完成：$error');
-      } else if (widget.appState.doctorChecks.any(
-        (result) => result.title == check.title && result.state == DoctorState.pass,
-      )) {
-        AppToast.success(context, '已修复：${check.title}');
-      } else {
-        AppToast.warning(context, '修复操作已完成，请查看最新检查结果');
-      }
+      if (mounted) AppToast.success(context, '已修复：${check.title}');
     } catch (error) {
       if (mounted) AppToast.error(context, '修复失败：$error');
     } finally {
@@ -48,173 +43,90 @@ class _DoctorPageState extends State<DoctorPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final checks = widget.appState.doctorChecks;
     final running = widget.appState.doctorRunning;
-    final starting = widget.appState.servicesStarting;
-    final activeTitles = widget.appState.doctorRunningTitles;
-    final completed = widget.appState.doctorCompletedCount;
-    final total = widget.appState.doctorTotalCount;
-    final checkedAt = widget.appState.doctorCheckedAt;
-    final error = widget.appState.doctorError;
-    final failed = widget.appState.doctorFailedCount;
-    final warned = widget.appState.doctorWarningCount;
-    final passed = widget.appState.doctorPassedCount;
+    final activeTitle = widget.appState.doctorRunningTitle;
+    final failed = checks.where((check) => check.state == DoctorState.fail).length;
     final checksByTitle = {for (final check in checks) check.title: check};
-    final titles = List.of(DoctorService.checkTitles)
-      ..sort((left, right) {
-        final priority = _checkPriority(checksByTitle[left]?.state).compareTo(
-          _checkPriority(checksByTitle[right]?.state),
-        );
-        if (priority != 0) return priority;
-        return DoctorService.checkTitles.indexOf(left).compareTo(
-          DoctorService.checkTitles.indexOf(right),
-        );
-      });
 
     return AppPageScaffold(
       title: '环境检查',
-      subtitle: starting
-          ? '服务正在启动，随后自动检查…'
-          : running
-          ? '并行检查中 · 已完成 $completed/$total · ${activeTitles.length} 项进行中'
-          : error != null
-          ? '检查未完成：$error'
+      subtitle: running
+          ? '正在逐项检查'
           : checks.isEmpty
-          ? '共 $total 项检查 · 异常项优先显示'
-          : '$passed 项通过 · $warned 项注意 · $failed 项失败'
-                '${checkedAt == null ? '' : ' · 上次检查 ${Fmt.clock(checkedAt)}'}',
+          ? null
+          : failed == 0
+          ? '全部通过'
+          : '$failed 项需要处理',
       actions: [
         Button(
           style: ButtonStyle.outline(size: ButtonSize.normal),
-          onPressed: running || widget.appState.busy || _repairingTitle != null ? null : _runChecks,
+          onPressed: running ? null : _runChecks,
           child: const AppButtonLabel(icon: BootstrapIcons.arrowRepeat, label: '重新检查'),
         ),
       ],
-      child: Padding(
+      child: GridView.builder(
         padding: AppSpacing.pagePadding,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
-            return Container(
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.card,
-                borderRadius: BorderRadius.circular(theme.radiusLg),
-                border: Border.all(color: AppTones.borderSubtle(theme)),
-              ),
-              child: Column(
-                children: [
-                  _CheckListHeader(wide: wide),
-                  Expanded(
-                    child: ListView.separated(
-                      padding: EdgeInsets.zero,
-                      itemCount: titles.length,
-                      separatorBuilder: (context, index) =>
-                          Container(height: 1, color: AppTones.borderFaint(theme)),
-                      itemBuilder: (context, index) {
-                        final title = titles[index];
-                        final check = checksByTitle[title];
-                        return _CheckRow(
-                          key: ValueKey(title),
-                          title: title,
-                          check: check,
-                          wide: wide,
-                          loading: activeTitles.contains(title),
-                          repairing: _repairingTitle == title,
-                          onRepair:
-                              check?.state == DoctorState.fail &&
-                                  check!.repairable &&
-                                  !running &&
-                                  !widget.appState.busy &&
-                                  _repairingTitle == null
-                              ? () => _repairCheck(check)
-                              : null,
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 340,
+          mainAxisExtent: 132,
+          crossAxisSpacing: AppSpacing.md,
+          mainAxisSpacing: AppSpacing.md,
         ),
-      ),
-    );
-  }
-
-  static int _checkPriority(DoctorState? state) => switch (state) {
-    DoctorState.fail => 0,
-    DoctorState.warn => 1,
-    null => 2,
-    DoctorState.pass => 3,
-  };
-}
-
-class _CheckListHeader extends StatelessWidget {
-  final bool wide;
-
-  const _CheckListHeader({required this.wide});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final style = AppTones.muted(theme, size: 11);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
-      decoration: BoxDecoration(
-        color: AppTones.surfaceSunken(theme),
-        border: Border(bottom: BorderSide(color: AppTones.borderSubtle(theme))),
-      ),
-      child: Row(
-        children: wide
-            ? [
-                SizedBox(width: _CheckRow.nameWidth, child: Text('检查项目', style: style)),
-                const Gap(AppSpacing.lg),
-                SizedBox(width: _CheckRow.statusWidth, child: Text('状态', style: style)),
-                const Gap(AppSpacing.lg),
-                Expanded(child: Text('检查结果', style: style)),
-                const Gap(AppSpacing.lg),
-                SizedBox(
-                  width: _CheckRow.actionWidth,
-                  child: Text('操作', textAlign: TextAlign.right, style: style),
-                ),
-              ]
-            : [
-                Expanded(child: Text('检查项目与结果', style: style)),
-                Text('状态', style: style),
-              ],
+        itemCount: DoctorService.checkTitles.length,
+        itemBuilder: (context, index) {
+          final title = DoctorService.checkTitles[index];
+          final check = checksByTitle[title];
+          return _CheckTile(
+            title: title,
+            check: check,
+            loading: running && activeTitle == title,
+            repairing: _repairingTitle == title,
+            onRepair: check?.state == DoctorState.fail && check!.repairable && !running
+                ? () => _repairCheck(check)
+                : null,
+          );
+        },
       ),
     );
   }
 }
 
-class _CheckRow extends StatelessWidget {
-  static const nameWidth = 168.0;
-  static const statusWidth = 80.0;
-  static const actionWidth = 64.0;
-
+class _CheckTile extends StatefulWidget {
   final String title;
   final DoctorCheck? check;
-  final bool wide;
   final bool loading;
   final bool repairing;
   final VoidCallback? onRepair;
 
-  const _CheckRow({
-    super.key,
+  const _CheckTile({
     required this.title,
     required this.check,
-    required this.wide,
     required this.loading,
     required this.repairing,
     this.onRepair,
   });
 
   @override
+  State<_CheckTile> createState() => _CheckTileState();
+}
+
+class _CheckTileState extends State<_CheckTile> {
+  static const _iconBoxSize = 36.0;
+  static const _statusSlotWidth = 52.0;
+
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final state = check?.state;
+    final state = widget.check?.state;
+    final tone = switch (state) {
+      DoctorState.pass => AppStatusTone.live,
+      DoctorState.warn => AppStatusTone.warn,
+      DoctorState.fail => AppStatusTone.error,
+      null => AppStatusTone.idle,
+    };
     final label = switch (state) {
       DoctorState.pass => '通过',
       DoctorState.warn => '注意',
@@ -227,104 +139,124 @@ class _CheckRow extends StatelessWidget {
       DoctorState.fail => theme.colorScheme.destructive,
       null => theme.colorScheme.mutedForeground,
     };
-    final busy = loading || repairing;
-    final detail = repairing
-        ? '正在修复，请稍候…'
-        : loading
-        ? '正在检查…'
-        : check?.detail ?? '等待检查';
-    final hint = busy ? null : check?.hint;
-    final name = Row(
-      children: [
-        Icon(_iconFor(title), size: 16, color: theme.colorScheme.mutedForeground),
-        const Gap(AppSpacing.md),
-        Expanded(child: Text(title, style: AppTones.title(theme, size: 12))),
-      ],
-    );
-    final status = busy
-        ? Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox.square(dimension: 12, child: CircularProgressIndicator()),
-              const Gap(AppSpacing.sm),
-              Text(repairing ? '修复中' : '检查中', style: AppTones.muted(theme, size: 11)),
-            ],
-          )
-        : AppTag(label: label, color: color);
-    final description = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SelectableText(
-          detail,
-          style: AppTones.mono(theme, size: 11, color: theme.colorScheme.foreground),
-          contextMenuBuilder: buildAppTextContextMenu,
-        ),
-        if (hint != null && hint.isNotEmpty) ...[
-          const Gap(AppSpacing.xs),
-          Text('建议：$hint', style: AppTones.muted(theme, size: 11)),
-        ],
-      ],
-    );
-    final action = onRepair != null || repairing
-        ? Button(
-            style: ButtonStyle.outline(size: ButtonSize.small),
-            onPressed: repairing ? null : onRepair,
-            child: const Text('修复'),
-          )
-        : null;
+    final detail = widget.loading ? '正在检查…' : widget.check?.detail ?? '等待检查';
+    final hint = widget.loading ? null : widget.check?.hint;
 
-    return Container(
-      constraints: const BoxConstraints(minHeight: 64),
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
-      color: busy
-          ? AppTones.interactionSurface(theme)
-          : state == DoctorState.fail
-          ? theme.colorScheme.destructive.withValues(alpha: 0.035)
-          : null,
-      child: wide
-          ? Row(
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AppCard(
+        selected: _hovered,
+        padding: const EdgeInsets.all(AppSpacing.md),
+        margin: EdgeInsets.zero,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
               children: [
-                SizedBox(width: nameWidth, child: name),
-                const Gap(AppSpacing.lg),
+                Container(
+                  width: _iconBoxSize,
+                  height: _iconBoxSize,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(theme.radiusMd),
+                    border: Border.all(color: color.withValues(alpha: 0.18)),
+                  ),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Center(child: Icon(_iconFor(widget.title), size: 16, color: color)),
+                      Positioned(
+                        right: -2,
+                        bottom: -2,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.card,
+                            shape: BoxShape.circle,
+                          ),
+                          child: AppStatusDot(tone: tone, size: 6),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Gap(AppSpacing.md),
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTones.title(theme, size: 13),
+                  ),
+                ),
+                const Gap(AppSpacing.sm),
                 SizedBox(
-                  width: statusWidth,
-                  child: Align(alignment: Alignment.centerLeft, child: status),
+                  width: _statusSlotWidth,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: widget.loading
+                        ? const SizedBox.square(dimension: 16, child: CircularProgressIndicator())
+                        : AppTag(label: label, color: color),
+                  ),
                 ),
-                const Gap(AppSpacing.lg),
-                Expanded(child: description),
-                const Gap(AppSpacing.lg),
-                SizedBox(
-                  width: actionWidth,
-                  child: Align(alignment: Alignment.centerRight, child: action),
-                ),
-              ],
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(child: name),
-                    const Gap(AppSpacing.md),
-                    status,
-                  ],
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 28, top: AppSpacing.sm),
-                  child: description,
-                ),
-                if (action != null) ...[
-                  const Gap(AppSpacing.sm),
-                  Align(alignment: Alignment.centerRight, child: action),
-                ],
               ],
             ),
+            const Gap(AppSpacing.sm),
+            SizedBox(
+              height: 30,
+              child: AppMonoText(
+                detail,
+                size: 10.5,
+                maxLines: 2,
+                color: theme.colorScheme.foreground.withValues(alpha: 0.74),
+              ),
+            ),
+            const Gap(AppSpacing.xs),
+            SizedBox(
+              height: 30,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Positioned.fill(
+                    right: widget.onRepair == null ? 0 : 66,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: hint == null
+                          ? const SizedBox.shrink()
+                          : Text(
+                              '建议：$hint',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTones.muted(theme, size: 10),
+                            ),
+                    ),
+                  ),
+                  if (widget.onRepair != null)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Button(
+                        style: ButtonStyle.outline(size: ButtonSize.small),
+                        onPressed: widget.repairing ? null : widget.onRepair,
+                        child: widget.repairing
+                            ? const SizedBox.square(
+                                dimension: 12,
+                                child: CircularProgressIndicator(),
+                              )
+                            : const Text('修复'),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   static IconData _iconFor(String title) {
     return switch (title) {
-      DoctorService.proxyCheckTitle => BootstrapIcons.globe,
       'Cloudflared' => BootstrapIcons.cloud,
       'Cloudflare 登录' => BootstrapIcons.check2,
       'Tunnel 配置' => BootstrapIcons.gear,
