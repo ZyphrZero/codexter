@@ -45,10 +45,11 @@ class AppState extends ChangeNotifier {
   bool _doctorRunning = false;
   final Set<String> _doctorRunningTitles = {};
   DateTime? _doctorCheckedAt;
-  String? _doctorError;
   Future<void>? _doctorTask;
-  Future<void>? _startupTask;
   Future<void>? _serviceStartTask;
+  Future<void>? _serviceStopTask;
+  Future<void>? _shutdownTask;
+  bool _servicesStopping = false;
   bool _shuttingDown = false;
 
   AppPage _currentPage = AppPage.home;
@@ -70,19 +71,8 @@ class AppState extends ChangeNotifier {
   List<DownstreamMcpEntry> get mcps => _mcps;
   List<DoctorCheck> get doctorChecks => _doctorChecks;
   bool get doctorRunning => _doctorRunning;
-  Set<String> get doctorRunningTitles => Set.unmodifiable(_doctorRunningTitles);
-  DateTime? get doctorCheckedAt => _doctorCheckedAt;
-  String? get doctorError => _doctorError;
-  int get doctorCompletedCount => _doctorChecks.length;
-  int get doctorTotalCount => DoctorService.checkTitles.length;
-  int get doctorFailedCount =>
-      _doctorChecks.where((check) => check.state == DoctorState.fail).length;
-  int get doctorWarningCount =>
-      _doctorChecks.where((check) => check.state == DoctorState.warn).length;
-  int get doctorPassedCount =>
-      _doctorChecks.where((check) => check.state == DoctorState.pass).length;
-  int get doctorSkippedCount =>
-      _doctorChecks.where((check) => check.state == DoctorState.skip).length;
+  String? get doctorRunningTitle =>
+      _doctorRunningTitles.isEmpty ? null : _doctorRunningTitles.first;
   AppPage get currentPage => _currentPage;
   String? get selectedWorkspaceUuid => _selectedWorkspaceUuid;
   String? get lastError => _lastError;
@@ -108,7 +98,6 @@ class AppState extends ChangeNotifier {
   bool get serverRunning => _serverRunning;
   bool get tunnelRunning => _tunnelRunning;
   bool get busy => _busy;
-  bool get servicesStarting => _serviceStartTask != null;
   AppUpdateInfo? get availableUpdate => _availableUpdate;
   SummaryNotice? get latestSummary => _latestSummary;
   int get summaryRevision => _summaryRevision;
@@ -474,26 +463,13 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  /// 主界面首帧显示后后台启动一次；重复请求共享同一个 Future。
-  Future<void> ensureStartup() {
-    return _startupTask ??= Future<void>(() async {
-      if (_shuttingDown) return;
-      await startServices();
-      if (!_shuttingDown) await runDoctor();
-    });
-  }
-
   /// 启动本地 HttpServer 并按需拉起长驻 Tunnel。
   Future<void> startServices({int tunnelReadyTimeoutSec = 45}) {
     final current = _serviceStartTask;
     if (current != null) return current;
-    if (_busy || _shuttingDown) return Future<void>.value();
+    if (_busy || _servicesStopping || _shuttingDown) return Future<void>.value();
     final task = _startServices(tunnelReadyTimeoutSec: tunnelReadyTimeoutSec).whenComplete(() {
       _serviceStartTask = null;
-      if (!_shuttingDown) {
-        notifyListeners();
-        _refreshDoctorIfAvailable();
-      }
     });
     _serviceStartTask = task;
     return task;
@@ -506,17 +482,17 @@ class AppState extends ChangeNotifier {
 
     try {
       await _startServer();
-      if (!_shuttingDown && _config.useCloudflared) {
+      if (!_servicesStopping && !_shuttingDown && _config.useCloudflared) {
         await _startTunnel(readyTimeoutSec: tunnelReadyTimeoutSec);
       }
     } catch (error) {
-      if (!_shuttingDown) {
+      if (!_servicesStopping && !_shuttingDown) {
         _lastError = '$error';
         debugPrint('启动服务失败: $error');
       }
     } finally {
       _busy = false;
-      notifyListeners();
+      if (!_shuttingDown) notifyListeners();
     }
   }
 
@@ -526,7 +502,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> restartTunnel() async {
-    if (_busy || !_config.useCloudflared) return;
+    if (_busy || _servicesStopping || _shuttingDown || !_config.useCloudflared) return;
     _busy = true;
     _lastError = null;
     notifyListeners();
@@ -544,34 +520,30 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> stopServices() async {
-    final starting = _serviceStartTask;
-    if (starting != null) await starting;
-    await _stopTunnel();
-    await mcpServer.stop();
-    _serverRunning = false;
-    notifyListeners();
-    _refreshDoctorIfAvailable();
+  Future<void> stopServices() {
+    final current = _serviceStopTask;
+    if (current != null) return current;
+    final task = _stopServices().whenComplete(() {
+      _serviceStopTask = null;
+    });
+    _serviceStopTask = task;
+    return task;
   }
 
-  /// 启动页使用：先尝试启动服务，再逐项执行关键环境检测。
-  Future<List<DoctorCheck>> runStartupChecks({
-    void Function(String status)? onStatus,
-    void Function(String title)? onCheckStart,
-    void Function(DoctorCheck check)? onCheckComplete,
-  }) async {
-    onStatus?.call('正在启动本地服务…');
-    await startServices(tunnelReadyTimeoutSec: 15);
-    onStatus?.call('正在检查运行环境…');
-    return doctorService.runStartup(
-      config: _config,
-      workspaces: _workspaces,
-      serverRunning: _serverRunning,
-      tunnelRunning: _tunnelRunning,
-      tunnelError: _lastError ?? tunnelService.logTail,
-      onCheckStart: onCheckStart,
-      onCheckComplete: onCheckComplete,
-    );
+  Future<void> _stopServices() async {
+    _servicesStopping = true;
+    try {
+      // 先终止可能正在等待就绪的 Tunnel，让启动任务尽快结束；
+      // 再等待启动任务收尾，避免它在停止过程中重新拉起服务。
+      await _stopTunnel();
+      final starting = _serviceStartTask;
+      if (starting != null) await starting;
+      await mcpServer.stop();
+      _serverRunning = false;
+    } finally {
+      _servicesStopping = false;
+      if (!_shuttingDown) notifyListeners();
+    }
   }
 
   /// 环境检测页与启动检测页共用同一套修复逻辑。
@@ -731,12 +703,9 @@ class AppState extends ChangeNotifier {
     _doctorRunningTitles.clear();
     _doctorChecks = [];
     _doctorCheckedAt = null;
-    _doctorError = null;
     notifyListeners();
 
     try {
-      final starting = _serviceStartTask;
-      if (starting != null) await starting;
       if (_shuttingDown) return;
       _doctorChecks = await doctorService.runAll(
         config: _config,
@@ -758,7 +727,6 @@ class AppState extends ChangeNotifier {
       );
       if (!_shuttingDown) _doctorCheckedAt = DateTime.now();
     } catch (error) {
-      _doctorError = '$error';
       debugPrint('环境检查未完成: $error');
     } finally {
       _doctorRunning = false;
@@ -767,24 +735,34 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> shutdown() async {
+  Future<void> shutdown() {
+    final current = _shutdownTask;
+    if (current != null) return current;
     _shuttingDown = true;
-    final starting = _serviceStartTask;
-    if (starting != null) await starting;
-    await Future.wait([_stopTunnel(), mcpServer.stop(), capabilities.shutdown()]);
+    final task = _shutdown();
+    _shutdownTask = task;
+    return task;
+  }
+
+  Future<void> _shutdown() async {
+    await Future.wait([stopServices(), capabilities.shutdown()]);
     _serverRunning = false;
   }
 
   Future<void> _startServer() async {
-    if (_serverRunning || _shuttingDown) return;
+    if (_serverRunning || _servicesStopping || _shuttingDown) return;
 
     final port = await AppPaths.findAvailablePort(_config.port);
     if (port != _config.port) {
       await saveGlobalConfig(_config.copyWith(port: port));
     }
 
-    if (_shuttingDown) return;
+    if (_servicesStopping || _shuttingDown) return;
     await mcpServer.start(host: _config.host, port: port);
+    if (_servicesStopping || _shuttingDown) {
+      await mcpServer.stop();
+      return;
+    }
     _serverRunning = true;
     for (final workspace in _workspaces) {
       _registerHandler(workspace);
@@ -793,14 +771,14 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _startTunnel({int readyTimeoutSec = 45}) async {
-    if (_tunnelRunning || _shuttingDown) return;
+    if (_tunnelRunning || _servicesStopping || _shuttingDown) return;
     final bin = await _resolveCloudflaredBin();
     final tunnelId = _config.tunnelId;
     if (tunnelId == null || tunnelId.isEmpty) {
       throw Exception('尚未创建 Cloudflare Tunnel');
     }
     await _writeTunnelConfig(tunnelId);
-    if (_shuttingDown) return;
+    if (_servicesStopping || _shuttingDown) return;
     await tunnelService.start(
       bin: bin,
       tunnelId: tunnelId,
@@ -808,6 +786,10 @@ class AppState extends ChangeNotifier {
       hostname: _config.domain,
       readyTimeoutSec: readyTimeoutSec,
     );
+    if (_servicesStopping || _shuttingDown) {
+      await tunnelService.stop();
+      return;
+    }
     _tunnelRunning = true;
   }
 

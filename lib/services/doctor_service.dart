@@ -32,10 +32,7 @@ class DoctorCheck {
 
 /// 环境自检：cloudflared、Cloudflare 登录、Tunnel 配置、本地服务、Git、工作区路径。
 class DoctorService {
-  static const proxyCheckTitle = '网络代理';
-
   static const checkTitles = <String>[
-    proxyCheckTitle,
     'Cloudflared',
     'Cloudflare 登录',
     'Tunnel 配置',
@@ -45,17 +42,7 @@ class DoctorService {
     '公网连通性',
     'Git',
     '工作区路径',
-  ];
-
-  static const startupCheckTitles = <String>[
-    proxyCheckTitle,
-    'Cloudflared',
-    'Cloudflare 登录',
-    'Tunnel 配置',
-    '公网域名',
-    '本地 MCP 服务',
-    'Cloudflare Tunnel',
-    '公网连通性',
+    '网络代理',
   ];
 
   Future<List<DoctorCheck>> runAll({
@@ -74,27 +61,6 @@ class DoctorService {
       tunnelRunning: tunnelRunning,
       tunnelError: tunnelError,
       includeOptional: true,
-      onCheckStart: onCheckStart,
-      onCheckComplete: onCheckComplete,
-    );
-  }
-
-  Future<List<DoctorCheck>> runStartup({
-    required GlobalConfig config,
-    required List<Workspace> workspaces,
-    required bool serverRunning,
-    required bool tunnelRunning,
-    String? tunnelError,
-    void Function(String title)? onCheckStart,
-    void Function(DoctorCheck check)? onCheckComplete,
-  }) async {
-    return _run(
-      config: config,
-      workspaces: workspaces,
-      serverRunning: serverRunning,
-      tunnelRunning: tunnelRunning,
-      tunnelError: tunnelError,
-      includeOptional: false,
       onCheckStart: onCheckStart,
       onCheckComplete: onCheckComplete,
     );
@@ -129,19 +95,19 @@ class DoctorService {
     }
 
     final checks = <Future<DoctorCheck>>[
-      run(proxyCheckTitle, () => _checkProxy(config)),
-      run(checkTitles[1], () => _checkCloudflaredBin(config)),
-      run(checkTitles[2], () => _checkCloudflareLogin(config)),
-      run(checkTitles[3], () => _checkTunnelConfig(config)),
-      run(checkTitles[4], () async => _checkDomain(config)),
-      run(checkTitles[5], () async => _checkServer(config, serverRunning)),
-      run(checkTitles[6], () async => _checkTunnel(config, tunnelRunning, tunnelError)),
-      run(checkTitles[7], () => _checkPublicRoute(config)),
+      run(checkTitles[0], () => _checkCloudflaredBin(config)),
+      run(checkTitles[1], () => _checkCloudflareLogin(config)),
+      run(checkTitles[2], () => _checkTunnelConfig(config)),
+      run(checkTitles[3], () async => _checkDomain(config)),
+      run(checkTitles[4], () async => _checkServer(config, serverRunning)),
+      run(checkTitles[5], () async => _checkTunnel(config, tunnelRunning, tunnelError)),
+      run(checkTitles[6], () => _checkPublicRoute(config)),
     ];
     if (includeOptional) {
-      checks.add(run(checkTitles[8], _checkGit));
-      checks.add(run(checkTitles[9], () => _checkWorkspacePaths(workspaces)));
+      checks.add(run(checkTitles[7], _checkGit));
+      checks.add(run(checkTitles[8], () => _checkWorkspacePaths(workspaces)));
     }
+    checks.add(run(checkTitles[9], () => _checkProxy(config)));
     return Future.wait(checks);
   }
 
@@ -152,10 +118,9 @@ class DoctorService {
   Future<DoctorCheck> _checkProxy(GlobalConfig config) async {
     if (!config.proxyEnabled) {
       return const DoctorCheck(
-        title: proxyCheckTitle,
+        title: '网络代理',
         state: DoctorState.skip,
-        detail: '网络代理未启用，已跳过检查',
-        hint: '将沿用应用启动时的代理环境；未设置时直连。',
+        detail: '未启用',
       );
     }
 
@@ -163,17 +128,15 @@ class DoctorService {
     try {
       await NetworkProxy.testConnection(url);
       return DoctorCheck(
-        title: proxyCheckTitle,
+        title: '网络代理',
         state: DoctorState.pass,
         detail: '已启用 · $url',
-        hint: '代理连通性正常；这不代表所有目标服务都可用。',
       );
     } catch (error) {
       return DoctorCheck(
-        title: proxyCheckTitle,
+        title: '网络代理',
         state: DoctorState.fail,
         detail: '代理连接失败：$url',
-        hint: '检查代理软件、地址和端口。',
         rawError: '$error',
       );
     }
@@ -181,12 +144,8 @@ class DoctorService {
 
   Future<DoctorCheck> _checkCloudflaredBin(GlobalConfig config) async {
     if (!config.useCloudflared) return _cloudflareSkipped('Cloudflared');
-    final candidates = <String>[
-      if (config.cloudflaredBin != null) config.cloudflaredBin!,
-      await AppPaths.cloudflaredPath,
-    ];
-    for (final bin in candidates) {
-      if (!await File(bin).exists()) continue;
+    final bin = await SetupService().findCloudflaredBin(configuredPath: config.cloudflaredBin);
+    if (bin != null) {
       try {
         final result = await Process.run(bin, ['--version']);
         if (result.exitCode == 0) {

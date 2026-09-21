@@ -10,6 +10,7 @@ import 'services/tray_service.dart';
 import 'stores/app_state.dart';
 import 'ui/app_shell.dart';
 import 'ui/pages/first_run_page.dart';
+import 'ui/pages/startup_check_page.dart';
 import 'ui/theme/app_theme.dart';
 import 'ui/widgets/close_window_dialog.dart';
 import 'utils/win_kill_job.dart';
@@ -46,6 +47,7 @@ class _CodexterAppState extends State<CodexterApp> with WindowListener, WidgetsB
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   bool _exiting = false;
   bool _closePromptOpen = false;
+  bool _startupGateCompleted = false;
 
   @override
   void initState() {
@@ -124,9 +126,24 @@ class _CodexterAppState extends State<CodexterApp> with WindowListener, WidgetsB
     if (_exiting) return;
     if (await desktopPlatform.requestExit()) return;
     _exiting = true;
-    await Future.wait([_trayService.dispose(), widget.appState.shutdown()]);
-    await windowManager.setPreventClose(false);
-    await windowManager.close();
+    try {
+      await Future.wait([
+        _runExitCleanup('托盘', _trayService.dispose),
+        _runExitCleanup('应用服务', widget.appState.shutdown),
+      ]);
+      await windowManager.setPreventClose(false);
+      await windowManager.close();
+    } finally {
+      _exiting = false;
+    }
+  }
+
+  Future<void> _runExitCleanup(String label, Future<void> Function() cleanup) async {
+    try {
+      await cleanup();
+    } catch (error, stackTrace) {
+      debugPrint('$label清理失败，继续退出：$error\n$stackTrace');
+    }
   }
 
   @override
@@ -145,6 +162,15 @@ class _CodexterAppState extends State<CodexterApp> with WindowListener, WidgetsB
               child: ToastLayer(
                 child: widget.appState.isFirstRun
                     ? FirstRunPage(appState: widget.appState)
+                    : !_startupGateCompleted
+                    ? StartupCheckPage(
+                        appState: widget.appState,
+                        onContinue: () {
+                          if (mounted) {
+                            setState(() => _startupGateCompleted = true);
+                          }
+                        },
+                      )
                     : AppShell(appState: widget.appState),
               ),
             ),
