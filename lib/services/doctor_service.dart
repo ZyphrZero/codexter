@@ -32,8 +32,6 @@ class DoctorCheck {
 
 /// 环境自检：cloudflared、Cloudflare 登录、Tunnel 配置、本地服务、Git、工作区路径。
 class DoctorService {
-  static const minCheckDisplayDuration = Duration(milliseconds: 200);
-
   static const checkTitles = <String>[
     'Cloudflared',
     'Cloudflare 登录',
@@ -108,34 +106,38 @@ class DoctorService {
     void Function(String title)? onCheckStart,
     void Function(DoctorCheck check)? onCheckComplete,
   }) async {
-    final results = <DoctorCheck>[];
-
-    Future<void> run(String title, Future<DoctorCheck> Function() check) async {
+    Future<DoctorCheck> run(String title, Future<DoctorCheck> Function() check) async {
       onCheckStart?.call(title);
-      final stopwatch = Stopwatch()..start();
-      final result = await check();
-      final remaining = minCheckDisplayDuration - stopwatch.elapsed;
-      if (remaining > Duration.zero) {
-        await Future<void>.delayed(remaining);
+      DoctorCheck result;
+      try {
+        result = await check();
+      } catch (error) {
+        result = DoctorCheck(
+          title: title,
+          state: DoctorState.fail,
+          detail: '检查未完成：$error',
+          hint: '处理上述错误后重新检查。',
+          rawError: '$error',
+        );
       }
-      results.add(result);
       onCheckComplete?.call(result);
+      return result;
     }
 
-    await run(checkTitles[0], () => _checkCloudflaredBin(config));
-    await run(checkTitles[1], () => _checkCloudflareLogin(config));
-    await run(checkTitles[2], () => _checkTunnelConfig(config));
-    await run(checkTitles[3], () async => _checkDomain(config));
-    await run(checkTitles[4], () async => _checkServer(config, serverRunning));
-    await run(checkTitles[5], () async => _checkTunnel(config, tunnelRunning, tunnelError));
-    await run(checkTitles[6], () => _checkPublicRoute(config));
-
+    final checks = <Future<DoctorCheck>>[
+      run(checkTitles[0], () => _checkCloudflaredBin(config)),
+      run(checkTitles[1], () => _checkCloudflareLogin(config)),
+      run(checkTitles[2], () => _checkTunnelConfig(config)),
+      run(checkTitles[3], () async => _checkDomain(config)),
+      run(checkTitles[4], () async => _checkServer(config, serverRunning)),
+      run(checkTitles[5], () async => _checkTunnel(config, tunnelRunning, tunnelError)),
+      run(checkTitles[6], () => _checkPublicRoute(config)),
+    ];
     if (includeOptional) {
-      await run(checkTitles[7], _checkGit);
-      await run(checkTitles[8], () => _checkWorkspacePaths(workspaces));
+      checks.add(run(checkTitles[7], _checkGit));
+      checks.add(run(checkTitles[8], () => _checkWorkspacePaths(workspaces)));
     }
-
-    return results;
+    return Future.wait(checks);
   }
 
   DoctorCheck _cloudflareSkipped(String title) {

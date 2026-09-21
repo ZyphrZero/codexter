@@ -61,12 +61,7 @@ class AppSidebar extends StatelessWidget {
                     active: _isActive(AppPage.mcpManage),
                     onPressed: () => appState.setCurrentPage(AppPage.mcpManage),
                   ),
-                  _NavItem(
-                    icon: BootstrapIcons.activity,
-                    label: '环境检查',
-                    active: _isActive(AppPage.doctor),
-                    onPressed: () => appState.setCurrentPage(AppPage.doctor),
-                  ),
+                  _buildDoctorItem(theme),
                   _NavItem(
                     icon: BootstrapIcons.gear,
                     label: '全局设置',
@@ -91,6 +86,62 @@ class AppSidebar extends StatelessWidget {
   String? get _enabledMcpCount {
     final count = appState.mcps.where((mcp) => mcp.enabled).length;
     return count == 0 ? null : '$count';
+  }
+
+  Widget _buildDoctorItem(ThemeData theme) {
+    final running = appState.doctorRunning;
+    final starting = appState.servicesStarting;
+    final completed = appState.doctorCompletedCount;
+    final total = appState.doctorTotalCount;
+    final failed = appState.doctorFailedCount;
+    final warned = appState.doctorWarningCount;
+    final hasResult = appState.doctorCheckedAt != null;
+    final incomplete = appState.doctorError != null;
+    final color = running || starting
+        ? AppTones.info
+        : incomplete || failed > 0
+        ? theme.colorScheme.destructive
+        : warned > 0
+        ? AppTones.warning
+        : hasResult
+        ? AppTones.success
+        : theme.colorScheme.mutedForeground;
+    final caption = running
+        ? '并行检查中 · ${appState.doctorRunningTitles.length} 项进行中'
+        : starting
+        ? '准备检查 · 服务启动中'
+        : incomplete
+        ? '检查未完成 · 已完成 $completed/$total'
+        : !hasResult
+        ? '等待首次检查'
+        : failed > 0
+        ? '$failed 项失败 · $warned 项注意'
+        : warned > 0
+        ? '$warned 项需注意 · 其余通过'
+        : '$total 项检查全部通过';
+    final badge = running
+        ? '$completed/$total'
+        : starting
+        ? '等待'
+        : incomplete
+        ? '异常'
+        : !hasResult
+        ? null
+        : failed + warned > 0
+        ? '${failed + warned}'
+        : '通过';
+    return _NavItem(
+      leading: running || starting
+          ? const SizedBox.square(dimension: 13, child: CircularProgressIndicator())
+          : Icon(BootstrapIcons.activity, size: 14, color: color),
+      label: '环境检查',
+      caption: caption,
+      badge: badge,
+      badgeColor: color,
+      progress: running ? completed / total : null,
+      active: _isActive(AppPage.doctor),
+      onPressed: () => appState.setCurrentPage(AppPage.doctor),
+    );
   }
 
   bool _isActive(AppPage page) {
@@ -292,6 +343,8 @@ class _NavItem extends StatefulWidget {
   final String label;
   final String? caption;
   final String? badge;
+  final Color? badgeColor;
+  final double? progress;
   final bool active;
   final VoidCallback onPressed;
 
@@ -303,6 +356,8 @@ class _NavItem extends StatefulWidget {
     this.leading,
     this.caption,
     this.badge,
+    this.badgeColor,
+    this.progress,
   });
 
   @override
@@ -395,12 +450,16 @@ class _NavItemState extends State<_NavItem> {
                               overflow: TextOverflow.ellipsis,
                               style: AppTones.muted(theme, size: 10),
                             ),
+                          if (widget.progress != null) ...[
+                            const Gap(AppSpacing.xs),
+                            SizedBox(height: 2, child: Progress(progress: widget.progress!)),
+                          ],
                         ],
                       ),
                     ),
                     if (widget.badge != null) ...[
                       const Gap(AppSpacing.xs),
-                      AppTag(label: widget.badge!),
+                      AppTag(label: widget.badge!, color: widget.badgeColor),
                     ],
                   ],
                 ),

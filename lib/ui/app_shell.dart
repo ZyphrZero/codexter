@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import '../stores/app_state.dart';
 import 'pages/doctor_page.dart';
@@ -31,6 +33,9 @@ class _AppShellState extends State<AppShell> {
       AppSpacing.sidebarMinWidth,
       AppSpacing.sidebarMaxWidth,
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(appState.ensureStartup());
+    });
   }
 
   @override
