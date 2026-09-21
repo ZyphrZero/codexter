@@ -124,8 +124,7 @@ class _CodexterAppState extends State<CodexterApp> with WindowListener, WidgetsB
     if (_exiting) return;
     if (await desktopPlatform.requestExit()) return;
     _exiting = true;
-    await _trayService.dispose();
-    await widget.appState.shutdown();
+    await Future.wait([_trayService.dispose(), widget.appState.shutdown()]);
     await windowManager.setPreventClose(false);
     await windowManager.close();
   }

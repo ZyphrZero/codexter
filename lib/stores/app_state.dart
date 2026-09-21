@@ -754,12 +754,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> shutdown() async {
     _shuttingDown = true;
-    await _stopTunnel();
     final starting = _serviceStartTask;
     if (starting != null) await starting;
-    await _stopTunnel();
-    await mcpServer.stop();
-    await capabilities.shutdown();
+    await Future.wait([_stopTunnel(), mcpServer.stop(), capabilities.shutdown()]);
     _serverRunning = false;
   }
 
