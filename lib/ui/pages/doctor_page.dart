@@ -60,6 +60,7 @@ class _DoctorPageState extends State<DoctorPage> {
     final failed = widget.appState.doctorFailedCount;
     final warned = widget.appState.doctorWarningCount;
     final passed = widget.appState.doctorPassedCount;
+    final skipped = widget.appState.doctorSkippedCount;
     final checksByTitle = {for (final check in checks) check.title: check};
     final titles = List.of(DoctorService.checkTitles)
       ..sort((left, right) {
@@ -83,6 +84,7 @@ class _DoctorPageState extends State<DoctorPage> {
           : checks.isEmpty
           ? '共 $total 项检查 · 异常项优先显示'
           : '$passed 项通过 · $warned 项注意 · $failed 项失败'
+                '${skipped == 0 ? '' : ' · $skipped 项跳过'}'
                 '${checkedAt == null ? '' : ' · 上次检查 ${Fmt.clock(checkedAt)}'}',
       actions: [
         Button(
@@ -147,7 +149,8 @@ class _DoctorPageState extends State<DoctorPage> {
     DoctorState.fail => 0,
     DoctorState.warn => 1,
     null => 2,
-    DoctorState.pass => 3,
+    DoctorState.skip => 3,
+    DoctorState.pass => 4,
   };
 }
 
@@ -222,12 +225,14 @@ class _CheckRow extends StatelessWidget {
       DoctorState.pass => '通过',
       DoctorState.warn => '注意',
       DoctorState.fail => '失败',
+      DoctorState.skip => '跳过',
       null => '等待',
     };
     final color = switch (state) {
       DoctorState.pass => AppTones.success,
       DoctorState.warn => AppTones.warning,
       DoctorState.fail => theme.colorScheme.destructive,
+      DoctorState.skip => theme.colorScheme.mutedForeground,
       null => theme.colorScheme.mutedForeground,
     };
     final busy = loading || repairing;
@@ -327,6 +332,7 @@ class _CheckRow extends StatelessWidget {
 
   static IconData _iconFor(String title) {
     return switch (title) {
+      DoctorService.proxyCheckTitle => BootstrapIcons.globe,
       'Cloudflared' => BootstrapIcons.cloud,
       'Cloudflare 登录' => BootstrapIcons.check2,
       'Tunnel 配置' => BootstrapIcons.gear,

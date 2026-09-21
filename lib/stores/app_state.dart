@@ -81,6 +81,8 @@ class AppState extends ChangeNotifier {
       _doctorChecks.where((check) => check.state == DoctorState.warn).length;
   int get doctorPassedCount =>
       _doctorChecks.where((check) => check.state == DoctorState.pass).length;
+  int get doctorSkippedCount =>
+      _doctorChecks.where((check) => check.state == DoctorState.skip).length;
   AppPage get currentPage => _currentPage;
   String? get selectedWorkspaceUuid => _selectedWorkspaceUuid;
   String? get lastError => _lastError;
@@ -278,6 +280,8 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> saveGlobalConfig(GlobalConfig config) async {
+    final proxyChanged =
+        config.proxyEnabled != _config.proxyEnabled || config.proxyUrl != _config.proxyUrl;
     config = config.copyWith(
       proxyUrl: NetworkProxy.normalizeUrl(config.proxyUrl, enabled: config.proxyEnabled),
     );
@@ -291,6 +295,7 @@ class AppState extends ChangeNotifier {
       await capabilities.syncMcps(_mcps);
     }
     notifyListeners();
+    if (proxyChanged) _refreshDoctorIfAvailable();
   }
 
   Future<void> completeFirstRun(GlobalConfig config) async {
@@ -485,7 +490,10 @@ class AppState extends ChangeNotifier {
     if (_busy || _shuttingDown) return Future<void>.value();
     final task = _startServices(tunnelReadyTimeoutSec: tunnelReadyTimeoutSec).whenComplete(() {
       _serviceStartTask = null;
-      if (!_shuttingDown) notifyListeners();
+      if (!_shuttingDown) {
+        notifyListeners();
+        _refreshDoctorIfAvailable();
+      }
     });
     _serviceStartTask = task;
     return task;
@@ -532,6 +540,7 @@ class AppState extends ChangeNotifier {
     } finally {
       _busy = false;
       notifyListeners();
+      _refreshDoctorIfAvailable();
     }
   }
 
@@ -542,6 +551,7 @@ class AppState extends ChangeNotifier {
     await mcpServer.stop();
     _serverRunning = false;
     notifyListeners();
+    _refreshDoctorIfAvailable();
   }
 
   /// 启动页使用：先尝试启动服务，再逐项执行关键环境检测。
@@ -709,6 +719,11 @@ class AppState extends ChangeNotifier {
     final task = _runDoctor().whenComplete(() => _doctorTask = null);
     _doctorTask = task;
     return task;
+  }
+
+  void _refreshDoctorIfAvailable() {
+    if (_shuttingDown || _doctorCheckedAt == null) return;
+    unawaited(runDoctor());
   }
 
   Future<void> _runDoctor() async {

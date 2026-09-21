@@ -95,6 +95,7 @@ class AppSidebar extends StatelessWidget {
     final total = appState.doctorTotalCount;
     final failed = appState.doctorFailedCount;
     final warned = appState.doctorWarningCount;
+    final skipped = appState.doctorSkippedCount;
     final hasResult = appState.doctorCheckedAt != null;
     final incomplete = appState.doctorError != null;
     final color = running || starting
@@ -103,6 +104,8 @@ class AppSidebar extends StatelessWidget {
         ? theme.colorScheme.destructive
         : warned > 0
         ? AppTones.warning
+        : skipped > 0
+        ? theme.colorScheme.mutedForeground
         : hasResult
         ? AppTones.success
         : theme.colorScheme.mutedForeground;
@@ -118,6 +121,8 @@ class AppSidebar extends StatelessWidget {
         ? '$failed 项失败 · $warned 项注意'
         : warned > 0
         ? '$warned 项需注意 · 其余通过'
+        : skipped > 0
+        ? '$skipped 项跳过 · 其余通过'
         : '$total 项检查全部通过';
     final badge = running
         ? '$completed/$total'
@@ -129,6 +134,8 @@ class AppSidebar extends StatelessWidget {
         ? null
         : failed + warned > 0
         ? '${failed + warned}'
+        : skipped > 0
+        ? '跳过'
         : '通过';
     return _NavItem(
       leading: running || starting
@@ -485,87 +492,166 @@ class _ServiceFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final serverTone = appState.serverRunning ? AppStatusTone.live : AppStatusTone.error;
-    final tunnelTone = !appState.config.useCloudflared
+    final serverTone = appState.serverRunning
+        ? AppStatusTone.live
+        : appState.servicesStarting
         ? AppStatusTone.warn
+        : AppStatusTone.error;
+    final tunnelTone = !appState.config.useCloudflared
+        ? AppStatusTone.idle
         : appState.tunnelRunning
         ? AppStatusTone.live
+        : appState.busy
+        ? AppStatusTone.warn
         : AppStatusTone.error;
 
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
       decoration: BoxDecoration(
+        color: AppTones.serviceCardSurface(theme),
         border: Border(top: BorderSide(color: theme.colorScheme.border)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _StatusCard(
+          _ServiceStatusRow(
             tone: serverTone,
-            icon: LucideIcons.server,
             label: '本地服务',
             value: appState.serverRunning
+                ? '运行中'
+                : appState.servicesStarting
+                ? '启动中'
+                : '未启动',
+            detail: appState.serverRunning
                 ? '${appState.config.host}:${appState.config.port}'
+                : appState.servicesStarting
+                ? '正在后台启动本地服务…'
                 : '服务尚未启动',
-            action: appState.config.proxyEnabled
-                ? AppTooltip(
-                    message:
-                        '网络代理 · ${Uri.tryParse(appState.config.proxyUrl)?.scheme.toUpperCase() ?? 'HTTP'}\n点击打开代理设置',
-                    alignment: Alignment.bottomCenter,
-                    anchorAlignment: Alignment.topCenter,
-                    child: SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: Button(
-                        style: ButtonStyle.secondary(
-                          density: ButtonDensity.icon,
-                          size: ButtonSize.small,
-                        ),
-                        onPressed: () => SettingsDialog.show(
-                          context,
-                          appState,
-                          initialSection: SettingsDialog.networkProxySection,
-                        ),
-                        child: const Icon(BootstrapIcons.globe, size: 13, color: AppTones.success),
-                      ),
-                    ),
-                  )
-                : null,
           ),
-          const Gap(AppSpacing.sm),
-          _StatusCard(
+          _ServiceStatusRow(
+            tone: appState.config.proxyEnabled ? AppStatusTone.live : AppStatusTone.idle,
+            label: '网络代理',
+            value: appState.config.proxyEnabled ? '已启用' : '跟随环境',
+            detail: appState.config.proxyEnabled
+                ? '${appState.config.proxyUrl}\n标识仅表示配置已启用，不代表实时连通性。'
+                : '自定义代理未启用；沿用启动环境的代理变量，未设置时直连。',
+            actionIcon: BootstrapIcons.gear,
+            actionLabel: '配置网络代理',
+            onAction: () => SettingsDialog.show(
+              context,
+              appState,
+              initialSection: SettingsDialog.networkProxySection,
+            ),
+          ),
+          _ServiceStatusRow(
             tone: tunnelTone,
-            icon: LucideIcons.cloud,
             label: 'Tunnel',
             value: !appState.config.useCloudflared
+                ? '已关闭'
+                : appState.tunnelRunning
+                ? '已连接'
+                : appState.busy
+                ? '连接中'
+                : '未连接',
+            detail: !appState.config.useCloudflared
                 ? '公网访问已关闭'
                 : appState.config.domain.isEmpty
                 ? '尚未配置域名'
                 : appState.config.domain,
-            action: AppTooltip(
-              message: '重启 Tunnel',
+            actionIcon: BootstrapIcons.arrowRepeat,
+            actionLabel: '重启 Tunnel',
+            onAction: appState.busy || !appState.config.useCloudflared
+                ? null
+                : () async {
+                    await appState.restartTunnel();
+                    if (!context.mounted) return;
+                    if (appState.lastError == null) {
+                      AppToast.success(context, 'Tunnel 已重启');
+                    } else {
+                      AppToast.error(context, '重启失败：${appState.lastErrorSummary}');
+                    }
+                  },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ServiceStatusRow extends StatelessWidget {
+  final AppStatusTone tone;
+  final String label;
+  final String value;
+  final String detail;
+  final IconData? actionIcon;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  const _ServiceStatusRow({
+    required this.tone,
+    required this.label,
+    required this.value,
+    required this.detail,
+    this.actionIcon,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final statusColor = switch (tone) {
+      AppStatusTone.live => theme.colorScheme.foreground,
+      AppStatusTone.warn => AppTones.warning,
+      AppStatusTone.error => theme.colorScheme.destructive,
+      AppStatusTone.idle => theme.colorScheme.mutedForeground,
+    };
+    return SizedBox(
+      height: 28,
+      child: Row(
+        children: [
+          Expanded(
+            child: AppTooltip(
+              message: '$label · $value\n$detail',
               alignment: Alignment.bottomCenter,
               anchorAlignment: Alignment.topCenter,
-              child: SizedBox(
-                width: 32,
-                height: 32,
-                child: Button(
-                  style: ButtonStyle.secondary(density: ButtonDensity.icon, size: ButtonSize.small),
-                  onPressed: appState.busy || !appState.config.useCloudflared
-                      ? null
-                      : () async {
-                          await appState.restartTunnel();
-                          if (!context.mounted) return;
-                          if (appState.lastError == null) {
-                            AppToast.success(context, 'Tunnel 已重启');
-                          } else {
-                            AppToast.error(context, '重启失败：${appState.lastErrorSummary}');
-                          }
-                        },
-                  child: const Icon(BootstrapIcons.arrowRepeat, size: 13),
-                ),
+              child: Row(
+                children: [
+                  AppStatusDot(tone: tone, size: 6, glow: false),
+                  const Gap(AppSpacing.sm),
+                  Text(label, style: AppTones.muted(theme, size: 11.5)),
+                  const Gap(AppSpacing.sm),
+                  Expanded(
+                    child: Text(
+                      value,
+                      textAlign: TextAlign.right,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTones.body(theme, size: 11, color: statusColor),
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
+          const Gap(AppSpacing.sm),
+          SizedBox.square(
+            dimension: 24,
+            child: actionIcon == null
+                ? null
+                : AppTooltip(
+                    message: actionLabel!,
+                    alignment: Alignment.bottomCenter,
+                    anchorAlignment: Alignment.topCenter,
+                    child: Button(
+                      style: ButtonStyle.secondary(
+                        density: ButtonDensity.icon,
+                        size: ButtonSize.small,
+                      ),
+                      onPressed: onAction,
+                      child: Icon(actionIcon, size: 12),
+                    ),
+                  ),
           ),
         ],
       ),

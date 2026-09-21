@@ -8,7 +8,7 @@ import 'network_proxy.dart';
 import 'setup_service.dart';
 import 'tunnel_error_classifier.dart';
 
-enum DoctorState { pass, warn, fail }
+enum DoctorState { pass, warn, fail, skip }
 
 class DoctorCheck {
   final String title;
@@ -32,7 +32,10 @@ class DoctorCheck {
 
 /// 环境自检：cloudflared、Cloudflare 登录、Tunnel 配置、本地服务、Git、工作区路径。
 class DoctorService {
+  static const proxyCheckTitle = '网络代理';
+
   static const checkTitles = <String>[
+    proxyCheckTitle,
     'Cloudflared',
     'Cloudflare 登录',
     'Tunnel 配置',
@@ -45,6 +48,7 @@ class DoctorService {
   ];
 
   static const startupCheckTitles = <String>[
+    proxyCheckTitle,
     'Cloudflared',
     'Cloudflare 登录',
     'Tunnel 配置',
@@ -125,23 +129,54 @@ class DoctorService {
     }
 
     final checks = <Future<DoctorCheck>>[
-      run(checkTitles[0], () => _checkCloudflaredBin(config)),
-      run(checkTitles[1], () => _checkCloudflareLogin(config)),
-      run(checkTitles[2], () => _checkTunnelConfig(config)),
-      run(checkTitles[3], () async => _checkDomain(config)),
-      run(checkTitles[4], () async => _checkServer(config, serverRunning)),
-      run(checkTitles[5], () async => _checkTunnel(config, tunnelRunning, tunnelError)),
-      run(checkTitles[6], () => _checkPublicRoute(config)),
+      run(proxyCheckTitle, () => _checkProxy(config)),
+      run(checkTitles[1], () => _checkCloudflaredBin(config)),
+      run(checkTitles[2], () => _checkCloudflareLogin(config)),
+      run(checkTitles[3], () => _checkTunnelConfig(config)),
+      run(checkTitles[4], () async => _checkDomain(config)),
+      run(checkTitles[5], () async => _checkServer(config, serverRunning)),
+      run(checkTitles[6], () async => _checkTunnel(config, tunnelRunning, tunnelError)),
+      run(checkTitles[7], () => _checkPublicRoute(config)),
     ];
     if (includeOptional) {
-      checks.add(run(checkTitles[7], _checkGit));
-      checks.add(run(checkTitles[8], () => _checkWorkspacePaths(workspaces)));
+      checks.add(run(checkTitles[8], _checkGit));
+      checks.add(run(checkTitles[9], () => _checkWorkspacePaths(workspaces)));
     }
     return Future.wait(checks);
   }
 
   DoctorCheck _cloudflareSkipped(String title) {
     return DoctorCheck(title: title, state: DoctorState.warn, detail: '跳过（未启用 Cloudflare Tunnel）');
+  }
+
+  Future<DoctorCheck> _checkProxy(GlobalConfig config) async {
+    if (!config.proxyEnabled) {
+      return const DoctorCheck(
+        title: proxyCheckTitle,
+        state: DoctorState.skip,
+        detail: '网络代理未启用，已跳过检查',
+        hint: '将沿用应用启动时的代理环境；未设置时直连。',
+      );
+    }
+
+    final url = NetworkProxy.normalizeUrl(config.proxyUrl, enabled: true);
+    try {
+      await NetworkProxy.testConnection(url);
+      return DoctorCheck(
+        title: proxyCheckTitle,
+        state: DoctorState.pass,
+        detail: '已启用 · $url',
+        hint: '代理连通性正常；这不代表所有目标服务都可用。',
+      );
+    } catch (error) {
+      return DoctorCheck(
+        title: proxyCheckTitle,
+        state: DoctorState.fail,
+        detail: '代理连接失败：$url',
+        hint: '检查代理软件、地址和端口。',
+        rawError: '$error',
+      );
+    }
   }
 
   Future<DoctorCheck> _checkCloudflaredBin(GlobalConfig config) async {
